@@ -1,3 +1,6 @@
+'use client';
+
+import { useEffect, useState } from 'react';
 import type { JwtPayload } from '@supabase/supabase-js';
 
 import {
@@ -17,6 +20,12 @@ export function HomeSidebar(props: {
   account?: Tables<'accounts'>;
   user: JwtPayload;
 }) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   return (
     <Sidebar collapsible={'icon'}>
       <SidebarHeader className={'h-16 justify-center'}>
@@ -32,10 +41,16 @@ export function HomeSidebar(props: {
       </SidebarContent>
 
       <SidebarFooter>
-        <ProfileAccountDropdownContainer
-          user={props.user}
-          account={props.account}
-        />
+        {/* Éviter l'hydration mismatch en n'affichant le dropdown qu'après le montage */}
+        {mounted ? (
+          <ProfileAccountDropdownContainer
+            user={props.user}
+            account={props.account}
+          />
+        ) : (
+          // Placeholder pendant le chargement pour éviter le layout shift
+          <div className="h-12 w-full animate-pulse rounded-md bg-gray-200" />
+        )}
       </SidebarFooter>
     </Sidebar>
   );

@@ -1,3 +1,6 @@
+'use client';
+
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 
 import { Menu } from 'lucide-react';
@@ -72,6 +75,24 @@ export function SiteNavigation() {
 }
 
 function MobileDropdown() {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Afficher un placeholder pendant le chargement côté serveur
+  if (!mounted) {
+    return (
+      <button
+        aria-label="Menu"
+        className="flex h-8 w-8 items-center justify-center"
+      >
+        <Menu className={'h-8 w-8'} />
+      </button>
+    );
+  }
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger aria-label={'Open Menu'}>
