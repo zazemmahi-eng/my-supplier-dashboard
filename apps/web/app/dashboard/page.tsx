@@ -19,6 +19,8 @@ import {
   Star
 } from 'lucide-react';
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_SUPPLIER_API_URL ?? 'http://127.0.0.1:8000';
+
 interface Supplier {
   supplier: string;
   score_risque: number;
@@ -42,17 +44,39 @@ interface Action {
   impact: string;
 }
 
+interface GlobalKpis {
+  taux_retard: number;
+  taux_defaut: number;
+  retard_moyen: number;
+  nb_fournisseurs: number;
+  nb_commandes: number;
+  defaut_max: number;
+  retard_max: number;
+  commandes_parfaites: number;
+  taux_conformite: number;
+}
+
+interface CreateSupplierPayload {
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+  quality_rating: number;
+  delivery_rating: number;
+  notes: string;
+}
+
 export default function SupplierDashboardPage() {
   const [selectedPeriod, setSelectedPeriod] = useState('30d');
-  const [kpis, setKpis] = useState<any>(null);
+  const [kpis, setKpis] = useState<GlobalKpis | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [actions, setActions] = useState<Action[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newSupplier, setNewSupplier] = useState({
+  const [newSupplier, setNewSupplier] = useState<CreateSupplierPayload>({
     name: '',
-    contact_email: '',
-    contact_phone: '',
+    email: '',
+    phone: '',
     address: '',
     quality_rating: 5,
     delivery_rating: 5,
@@ -66,7 +90,7 @@ export default function SupplierDashboardPage() {
 
   const fetchData = async () => {
     try {
-      const response = await axios.get('http://127.0.0.1:8000/api/dashboard/data');
+      const response = await axios.get(`${API_BASE_URL}/api/dashboard/data`);
       setKpis(response.data.kpis_globaux);
       setSuppliers(response.data.suppliers);
       setActions(response.data.actions);
@@ -79,20 +103,24 @@ export default function SupplierDashboardPage() {
 
   const handleAddSupplier = async () => {
     try {
-      await axios.post('http://127.0.0.1:8000/api/supplier/create', newSupplier);
-      alert(`✅ Fournisseur "${newSupplier.name}" ajouté (stockage temporaire)`);
+      await axios.post(`${API_BASE_URL}/api/supplier/create`, newSupplier);
+      alert(`✅ Fournisseur "${newSupplier.name}" ajouté et synchronisé avec Supabase`);
+      await fetchData();
       setShowAddModal(false);
       setNewSupplier({
         name: '',
-        contact_email: '',
-        contact_phone: '',
+        email: '',
+        phone: '',
         address: '',
         quality_rating: 5,
         delivery_rating: 5,
         notes: ''
       });
-    } catch (error: any) {
-      alert(`❌ Erreur : ${error.response?.data?.detail || 'Impossible d\'ajouter le fournisseur'}`);
+    } catch (error: unknown) {
+      const detail = axios.isAxiosError(error)
+        ? error.response?.data?.detail ?? "Impossible d'ajouter le fournisseur"
+        : "Erreur inconnue lors de l'ajout du fournisseur";
+      alert(`❌ Erreur : ${detail}`);
     }
   };
 
@@ -377,8 +405,8 @@ export default function SupplierDashboardPage() {
                     <Mail className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
                     <input
                       type="email"
-                      value={newSupplier.contact_email}
-                      onChange={(e) => setNewSupplier({ ...newSupplier, contact_email: e.target.value })}
+                      value={newSupplier.email}
+                      onChange={(e) => setNewSupplier({ ...newSupplier, email: e.target.value })}
                       className="w-full rounded-lg border border-gray-300 p-3 pl-10 focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                       placeholder="contact@fournisseur.com"
                     />
@@ -391,8 +419,8 @@ export default function SupplierDashboardPage() {
                     <Phone className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
                     <input
                       type="tel"
-                      value={newSupplier.contact_phone}
-                      onChange={(e) => setNewSupplier({ ...newSupplier, contact_phone: e.target.value })}
+                      value={newSupplier.phone}
+                      onChange={(e) => setNewSupplier({ ...newSupplier, phone: e.target.value })}
                       className="w-full rounded-lg border border-gray-300 p-3 pl-10 focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                       placeholder="+212 6XX XXX XXX"
                     />
@@ -468,7 +496,7 @@ export default function SupplierDashboardPage() {
 
               <div className="rounded-lg bg-yellow-50 p-4">
                 <p className="text-sm text-yellow-800">
-                  ⚠️ <strong>Note:</strong> Les données seront stockées temporairement en mémoire (non persistantes sans base de données).
+                  ⚠️ <strong>Note:</strong> Les fournisseurs sont désormais enregistrés dans PostgreSQL Supabase local. Assurez-vous que la base est démarrée avant l&apos;ajout.
                 </p>
               </div>
             </div>

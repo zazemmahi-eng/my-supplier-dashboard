@@ -16,6 +16,8 @@ import {
 } from 'recharts';
 import { TrendingUp, TrendingDown, Minus, AlertCircle } from 'lucide-react';
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_SUPPLIER_API_URL ?? 'http://127.0.0.1:8000';
+
 interface Prediction {
   supplier: string;
   predicted_defect: number;
@@ -33,7 +35,7 @@ export default function SupplierPredictions() {
   useEffect(() => {
     const fetchPredictions = async () => {
       try {
-        const response = await axios.get('http://127.0.0.1:8000/api/predictions');
+        const response = await axios.get(`${API_BASE_URL}/api/predictions`);
         setPredictions(response.data.predictions);
       } catch (error) {
         console.error('Erreur chargement prédictions:', error);
