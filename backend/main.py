@@ -1,3 +1,11 @@
+import sys
+import os
+from pathlib import Path
+
+# Ajouter le dossier parent au path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
 from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any, List, Optional
@@ -6,9 +14,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, date
 import uuid
 
-# ============================================
-# IMPORTS AVEC PRÉFIXE backend.
-# ============================================
+# ✅ Imports corrigés
 from backend.mon_analyse import (
     charger_donnees,
     calculer_kpis_globaux,
@@ -18,8 +24,11 @@ from backend.mon_analyse import (
     obtenir_detail_fournisseur,
     calculer_stats_periode
 )
+
 from backend.models import Supplier, Order, Account
 from backend.database import get_db, init_db
+
+# ... reste du code
 
 # ============================================
 # CONFIGURATION FASTAPI
@@ -82,8 +91,8 @@ class OrderCreate(BaseModel):
 class OrderRead(BaseModel):
     id: uuid.UUID
     supplier_id: uuid.UUID
-    date_promised: date
-    date_delivered: Optional[date]
+    date_promised: datetime  # Modifié en datetime pour correspondre au modèle SQL
+    date_delivered: Optional[datetime] # Modifié en datetime
     defects: float
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
