@@ -1,26 +1,19 @@
 'use client';
-import SupplierPredictions from 'components/SupplierPredictions';
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
-  TrendingUp,
-  TrendingDown,
-  AlertTriangle,
-  Clock,
-  CheckCircle,
-  Package,
-  Activity,
-  Plus,
-  X,
-  Mail,
-  Phone,
-  MapPin,
-  FileText,
-  Star
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
+  Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
+} from 'recharts';
+import {
+  TrendingUp, TrendingDown, AlertTriangle, Clock, CheckCircle,
+  Package, Activity, Plus, X, Mail, Phone, MapPin, FileText, Star,
+  BarChart3, PieChart as PieChartIcon, LineChart as LineChartIcon
 } from 'lucide-react';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_SUPPLIER_API_URL ?? 'http://127.0.0.1:8000';
 
+// ============== INTERFACES ==============
 interface Supplier {
   supplier: string;
   score_risque: number;
@@ -56,46 +49,68 @@ interface GlobalKpis {
   taux_conformite: number;
 }
 
-interface CreateSupplierPayload {
-  name: string;
-  email: string;
-  phone: string;
-  address: string;
-  quality_rating: number;
-  delivery_rating: number;
-  notes: string;
+interface Prediction {
+  supplier: string;
+  predicted_defect: number;
+  predicted_delay: number;
+  method_ma_defect: number;
+  method_ma_delay: number;
+  method_lr_defect: number;
+  method_lr_delay: number;
+  method_exp_defect: number;
+  method_exp_delay: number;
+  confiance: string;
+  nb_commandes_historique: number;
 }
 
+type Screen = 'overview' | 'charts' | 'predictions' | 'distribution';
+
+const COLORS = {
+  good: '#10b981',
+  warning: '#f59e0b', 
+  alert: '#ef4444',
+  faible: '#10b981',
+  modere: '#f59e0b',
+  eleve: '#ef4444'
+};
+
+const CreateSupplierPayload = {
+  name: '', email: '', phone: '', address: '',
+  quality_rating: 5, delivery_rating: 5, notes: ''
+};
+
 export default function SupplierDashboardPage() {
-  const [selectedPeriod, setSelectedPeriod] = useState('30d');
+  const [activeScreen, setActiveScreen] = useState<Screen>('overview');
   const [kpis, setKpis] = useState<GlobalKpis | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [actions, setActions] = useState<Action[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newSupplier, setNewSupplier] = useState<CreateSupplierPayload>({
-    name: '',
-    email: '',
-    phone: '',
-    address: '',
-    quality_rating: 5,
-    delivery_rating: 5,
-    notes: ''
-  });
+  const [newSupplier, setNewSupplier] = useState(CreateSupplierPayload);
 
-  // Charger les données
   useEffect(() => {
     fetchData();
   }, []);
 
   const fetchData = async () => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/dashboard/data`);
-      setKpis(response.data.kpis_globaux);
-      setSuppliers(response.data.suppliers);
-      setActions(response.data.actions);
-    } catch (error) {
-      console.error('Erreur chargement données:', error);
+      setLoading(true);
+      setError(null);
+      
+      const [dashboardRes, predictionsRes] = await Promise.all([
+        axios.get(`${API_BASE_URL}/api/dashboard/data`),
+        axios.get(`${API_BASE_URL}/api/predictions`)
+      ]);
+
+      setKpis(dashboardRes.data.kpis_globaux);
+      setSuppliers(dashboardRes.data.suppliers);
+      setActions(dashboardRes.data.actions);
+      setPredictions(predictionsRes.data.predictions);
+    } catch (err) {
+      console.error('Erreur chargement données:', err);
+      setError('Impossible de charger les données. Vérifiez que le backend est lancé.');
     } finally {
       setLoading(false);
     }
@@ -104,58 +119,76 @@ export default function SupplierDashboardPage() {
   const handleAddSupplier = async () => {
     try {
       await axios.post(`${API_BASE_URL}/api/supplier/create`, newSupplier);
-      alert(`✅ Fournisseur "${newSupplier.name}" ajouté et synchronisé avec Supabase`);
+      alert(`✅ Fournisseur "${newSupplier.name}" ajouté avec succès`);
       await fetchData();
       setShowAddModal(false);
-      setNewSupplier({
-        name: '',
-        email: '',
-        phone: '',
-        address: '',
-        quality_rating: 5,
-        delivery_rating: 5,
-        notes: ''
-      });
-    } catch (error: unknown) {
-      const detail = axios.isAxiosError(error)
-        ? error.response?.data?.detail ?? "Impossible d'ajouter le fournisseur"
-        : "Erreur inconnue lors de l'ajout du fournisseur";
+      setNewSupplier(CreateSupplierPayload);
+    } catch (err: unknown) {
+      const detail = axios.isAxiosError(err)
+        ? err.response?.data?.detail ?? "Impossible d'ajouter le fournisseur"
+        : "Erreur inconnue";
       alert(`❌ Erreur : ${detail}`);
     }
   };
 
+  // ============== DONNÉES POUR GRAPHIQUES ==============
+  
+  // Graphique circulaire (Pie Chart)
+  const pieData = [
+    { name: 'Faible', value: suppliers.filter(s => s.niveau_risque === 'Faible').length, color: COLORS.faible },
+    { name: 'Modéré', value: suppliers.filter(s => s.niveau_risque === 'Modéré').length, color: COLORS.modere },
+    { name: 'Élevé', value: suppliers.filter(s => s.niveau_risque === 'Élevé').length, color: COLORS.eleve },
+  ].filter(d => d.value > 0);
+
+  // Graphique en barres (scores de risque)
+  const barData = suppliers.map(s => ({
+    name: s.supplier.replace('Fournisseur ', '').substring(0, 10),
+    score: s.score_risque,
+    fill: COLORS[s.status as keyof typeof COLORS] || '#6b7280'
+  }));
+
+  // Graphique en lignes (défauts et retards)
+  const lineData = suppliers.map(s => ({
+    name: s.supplier.replace('Fournisseur ', '').substring(0, 10),
+    defauts: s.taux_defaut,
+    retards: s.retard_moyen
+  }));
+
+  // Comparaison méthodes de prédiction
+  const predictionCompareData = predictions.map(p => ({
+    name: p.supplier.replace('Fournisseur ', '').substring(0, 8),
+    'Moy. Glissante': p.method_ma_defect,
+    'Régression': p.method_lr_defect,
+    'Exponentielle': p.method_exp_defect,
+    'Finale': p.predicted_defect
+  }));
+
+  // ============== HELPERS ==============
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'good':
-        return 'bg-green-100 text-green-800 border-green-300';
-      case 'warning':
-        return 'bg-yellow-100 text-yellow-800 border-yellow-300';
-      case 'alert':
-        return 'bg-red-100 text-red-800 border-red-300';
-      default:
-        return 'bg-gray-100 text-gray-800 border-gray-300';
+      case 'good': return 'bg-green-100 text-green-800 border-green-300';
+      case 'warning': return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+      case 'alert': return 'bg-red-100 text-red-800 border-red-300';
+      default: return 'bg-gray-100 text-gray-800 border-gray-300';
     }
   };
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
-      case 'high':
-        return 'bg-red-500 text-white';
-      case 'medium':
-        return 'bg-orange-500 text-white';
-      case 'low':
-        return 'bg-blue-500 text-white';
-      default:
-        return 'bg-gray-500 text-white';
+      case 'high': return 'bg-red-500 text-white';
+      case 'medium': return 'bg-orange-500 text-white';
+      case 'low': return 'bg-blue-500 text-white';
+      default: return 'bg-gray-500 text-white';
     }
   };
 
-  const getTendanceIcon = (tendance: string) => {
-    if (tendance === 'hausse') return <TrendingUp className="h-5 w-5 text-red-500" />;
-    if (tendance === 'baisse') return <TrendingDown className="h-5 w-5 text-green-500" />;
+  const getTrendIcon = (tendance: string) => {
+    if (tendance === 'hausse') return <TrendingUp className="h-4 w-4 text-red-500" />;
+    if (tendance === 'baisse') return <TrendingDown className="h-4 w-4 text-green-500" />;
     return <span className="text-gray-400">→</span>;
   };
 
+  // ============== LOADING / ERROR ==============
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
@@ -167,221 +200,429 @@ export default function SupplierDashboardPage() {
     );
   }
 
+  if (error) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+        <div className="text-center bg-white p-8 rounded-xl shadow-lg max-w-md">
+          <AlertTriangle className="mx-auto h-16 w-16 text-red-500 mb-4" />
+          <h2 className="text-xl font-bold text-gray-900 mb-2">Erreur de connexion</h2>
+          <p className="text-gray-600 mb-4">{error}</p>
+          <button onClick={fetchData} className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">
+            Réessayer
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 p-6">
       {/* Header */}
       <div className="mb-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-4xl font-bold text-gray-900">
-              📊 Tableau de Bord Prédictif
-            </h1>
-            <p className="mt-2 text-lg text-gray-600">
-              Analyse intelligente des risques fournisseurs
-            </p>
-          </div>
-          <div className="flex gap-3">
-            {/* Sélecteur de période */}
-            {['7d', '30d', '90d'].map((period) => (
-              <button
-                key={period}
-                onClick={() => setSelectedPeriod(period)}
-                className={`rounded-lg px-5 py-2.5 text-sm font-semibold transition-all ${
-                  selectedPeriod === period
-                    ? 'bg-blue-600 text-white shadow-lg'
-                    : 'bg-white text-gray-700 hover:bg-gray-100 shadow'
-                }`}
-              >
-                {period === '7d' && '7 jours'}
-                {period === '30d' && '30 jours'}
-                {period === '90d' && '90 jours'}
-              </button>
-            ))}
-            {/* Bouton Ajouter fournisseur */}
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-4xl font-bold text-gray-900">📊 Dashboard Prédictif</h1>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="flex items-center gap-2 rounded-lg bg-green-600 px-5 py-2.5 font-semibold text-white shadow-lg hover:bg-green-700"
+          >
+            <Plus className="h-5 w-5" /> Ajouter fournisseur
+          </button>
+        </div>
+
+        {/* Navigation */}
+        <div className="flex gap-3 flex-wrap">
+          {[
+            { key: 'overview', icon: BarChart3, label: 'Vue générale' },
+            { key: 'charts', icon: LineChartIcon, label: 'Graphiques' },
+            { key: 'predictions', icon: Activity, label: 'Prédictions' },
+            { key: 'distribution', icon: PieChartIcon, label: 'Distribution' },
+          ].map(({ key, icon: Icon, label }) => (
             <button
-              onClick={() => setShowAddModal(true)}
-              className="flex items-center gap-2 rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg hover:bg-green-700 transition-all"
+              key={key}
+              onClick={() => setActiveScreen(key as Screen)}
+              className={`flex items-center gap-2 rounded-lg px-5 py-2.5 font-semibold transition-all ${
+                activeScreen === key
+                  ? 'bg-blue-600 text-white shadow-lg'
+                  : 'bg-white text-gray-700 hover:bg-gray-100 shadow'
+              }`}
             >
-              <Plus className="h-5 w-5" />
-              Ajouter fournisseur
+              <Icon className="h-5 w-5" /> {label}
             </button>
-          </div>
+          ))}
         </div>
       </div>
 
-      {/* KPIs Globaux */}
-      <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-5">
-        <div className="rounded-xl bg-white p-6 shadow-lg transition-all hover:shadow-xl">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Taux de défauts</p>
-              <p className="mt-2 text-3xl font-bold text-orange-600">{kpis?.taux_defaut}%</p>
-              <p className="mt-1 text-xs text-gray-500">Max: {kpis?.defaut_max}%</p>
+      {/* ========== ÉCRAN 1 : OVERVIEW ========== */}
+      {activeScreen === 'overview' && (
+        <div className="space-y-8">
+          {/* KPIs */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-6">
+            <div className="rounded-xl bg-white p-6 shadow-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600">Taux défauts</p>
+                  <p className="mt-2 text-3xl font-bold text-orange-600">{kpis?.taux_defaut}%</p>
+                  <p className="text-xs text-gray-500">Max: {kpis?.defaut_max}%</p>
+                </div>
+                <AlertTriangle className="h-12 w-12 text-orange-200" />
+              </div>
             </div>
-            <div className="rounded-full bg-orange-100 p-4">
-              <AlertTriangle className="h-7 w-7 text-orange-600" />
+            <div className="rounded-xl bg-white p-6 shadow-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600">Retard moyen</p>
+                  <p className="mt-2 text-3xl font-bold text-blue-600">{kpis?.retard_moyen}j</p>
+                  <p className="text-xs text-gray-500">Max: {kpis?.retard_max}j</p>
+                </div>
+                <Clock className="h-12 w-12 text-blue-200" />
+              </div>
             </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl bg-white p-6 shadow-lg transition-all hover:shadow-xl">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Retard moyen</p>
-              <p className="mt-2 text-3xl font-bold text-blue-600">{kpis?.retard_moyen}j</p>
-              <p className="mt-1 text-xs text-gray-500">Max: {kpis?.retard_max}j</p>
+            <div className="rounded-xl bg-white p-6 shadow-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600">Fournisseurs</p>
+                  <p className="mt-2 text-3xl font-bold text-purple-600">{kpis?.nb_fournisseurs}</p>
+                </div>
+                <Package className="h-12 w-12 text-purple-200" />
+              </div>
             </div>
-            <div className="rounded-full bg-blue-100 p-4">
-              <Clock className="h-7 w-7 text-blue-600" />
+            <div className="rounded-xl bg-white p-6 shadow-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600">Commandes</p>
+                  <p className="mt-2 text-3xl font-bold text-green-600">{kpis?.nb_commandes}</p>
+                </div>
+                <Activity className="h-12 w-12 text-green-200" />
+              </div>
             </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl bg-white p-6 shadow-lg transition-all hover:shadow-xl">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Fournisseurs</p>
-              <p className="mt-2 text-3xl font-bold text-purple-600">{kpis?.nb_fournisseurs}</p>
-              <p className="mt-1 text-xs text-gray-500">Actifs</p>
-            </div>
-            <div className="rounded-full bg-purple-100 p-4">
-              <Package className="h-7 w-7 text-purple-600" />
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl bg-white p-6 shadow-lg transition-all hover:shadow-xl">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Commandes</p>
-              <p className="mt-2 text-3xl font-bold text-green-600">{kpis?.nb_commandes}</p>
-              <p className="mt-1 text-xs text-gray-500">Total</p>
-            </div>
-            <div className="rounded-full bg-green-100 p-4">
-              <Activity className="h-7 w-7 text-green-600" />
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl bg-white p-6 shadow-lg transition-all hover:shadow-xl">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Conformité</p>
-              <p className="mt-2 text-3xl font-bold text-emerald-600">{kpis?.taux_conformite}%</p>
-              <p className="mt-1 text-xs text-gray-500">{kpis?.commandes_parfaites} parfaites</p>
-            </div>
-            <div className="rounded-full bg-emerald-100 p-4">
-              <CheckCircle className="h-7 w-7 text-emerald-600" />
+            <div className="rounded-xl bg-white p-6 shadow-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600">Conformité</p>
+                  <p className="mt-2 text-3xl font-bold text-emerald-600">{kpis?.taux_conformite}%</p>
+                  <p className="text-xs text-gray-500">{kpis?.commandes_parfaites} parfaites</p>
+                </div>
+                <CheckCircle className="h-12 w-12 text-emerald-200" />
+              </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Graphique Prédictions */}
-      <div className="mb-8">
-        <SupplierPredictions />
-      </div>
-
-      {/* Grille Fournisseurs + Actions */}
-      <div className="grid gap-8 lg:grid-cols-3">
-        {/* Fournisseurs (2 colonnes) */}
-        <div className="lg:col-span-2">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-2xl font-bold text-gray-900">
-              🏭 Fournisseurs ({suppliers.length})
-            </h2>
-          </div>
-          <div className="space-y-4">
-            {suppliers.map((supplier) => (
-              <div
-                key={supplier.supplier}
-                className={`rounded-xl border-2 p-6 shadow-md transition-all hover:shadow-lg ${getStatusColor(supplier.status)}`}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3">
-                      <h3 className="text-2xl font-bold">{supplier.supplier}</h3>
-                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                        supplier.status === 'good' ? 'bg-green-200' :
-                        supplier.status === 'warning' ? 'bg-yellow-200' :
-                        'bg-red-200'
-                      }`}>
-                        {supplier.niveau_risque}
-                      </span>
-                    </div>
-                    
-                    <div className="mt-4 grid grid-cols-2 gap-4">
-                      <div>
-                        <p className="text-sm text-gray-600">Défauts</p>
-                        <p className="text-xl font-bold">{supplier.taux_defaut}%</p>
-                        <div className="flex items-center gap-1 mt-1">
-                          {getTendanceIcon(supplier.tendance_defauts)}
-                          <span className="text-xs capitalize">{supplier.tendance_defauts}</span>
+          {/* Fournisseurs + Actions */}
+          <div className="grid gap-8 lg:grid-cols-3">
+            <div className="lg:col-span-2">
+              <h2 className="mb-4 text-2xl font-bold text-gray-900">🏭 Fournisseurs</h2>
+              <div className="space-y-4">
+                {suppliers.map((supplier) => (
+                  <div key={supplier.supplier} className={`rounded-xl border-2 p-5 shadow-md ${getStatusColor(supplier.status)}`}>
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-3">
+                          <h3 className="text-xl font-bold">{supplier.supplier}</h3>
+                          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                            supplier.status === 'good' ? 'bg-green-200' :
+                            supplier.status === 'warning' ? 'bg-yellow-200' : 'bg-red-200'
+                          }`}>
+                            {supplier.niveau_risque}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <p className="text-sm text-gray-600">Défauts</p>
+                            <div className="flex items-center gap-2">
+                              <p className="text-lg font-bold">{supplier.taux_defaut}%</p>
+                              {getTrendIcon(supplier.tendance_defauts)}
+                            </div>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-600">Retard moyen</p>
+                            <div className="flex items-center gap-2">
+                              <p className="text-lg font-bold">{supplier.retard_moyen}j</p>
+                              {getTrendIcon(supplier.tendance_retards)}
+                            </div>
+                          </div>
                         </div>
                       </div>
+                      <div className="text-right">
+                        <p className="text-sm text-gray-600">Score</p>
+                        <p className="text-3xl font-bold">{supplier.score_risque}</p>
+                        <p className="text-xs text-gray-500">{supplier.nb_commandes} cmd</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h2 className="mb-4 text-2xl font-bold text-gray-900">⚡ Actions</h2>
+              <div className="space-y-3">
+                {actions.slice(0, 6).map((action, idx) => (
+                  <div key={idx} className="rounded-lg bg-white p-4 shadow-md">
+                    <div className="flex items-start gap-3">
+                      <span className={`rounded-full px-2 py-1 text-xs font-bold ${getPriorityColor(action.priority)}`}>
+                        {action.priority.toUpperCase()}
+                      </span>
                       <div>
-                        <p className="text-sm text-gray-600">Retard moyen</p>
-                        <p className="text-xl font-bold">{supplier.retard_moyen}j</p>
-                        <div className="flex items-center gap-1 mt-1">
-                          {getTendanceIcon(supplier.tendance_retards)}
-                          <span className="text-xs capitalize">{supplier.tendance_retards}</span>
+                        <p className="font-semibold text-gray-900">{action.action}</p>
+                        <p className="text-sm text-gray-600">{action.raison}</p>
+                        <p className="text-xs text-gray-500 mt-1">⏱️ {action.delai}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== ÉCRAN 2 : GRAPHIQUES ========== */}
+      {activeScreen === 'charts' && (
+        <div className="space-y-8">
+          <div className="grid gap-8 lg:grid-cols-2">
+            {/* Graphique en Barres - Scores de Risque */}
+            <div className="rounded-xl bg-white p-6 shadow-lg">
+              <h2 className="mb-4 text-xl font-bold text-gray-900">📊 Scores de Risque par Fournisseur</h2>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={barData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis domain={[0, 100]} />
+                  <Tooltip formatter={(value) => [`${value}`, 'Score']} />
+                  <Bar dataKey="score" radius={[4, 4, 0, 0]}>
+                    {barData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.fill} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Graphique en Lignes - Défauts et Retards */}
+            <div className="rounded-xl bg-white p-6 shadow-lg">
+              <h2 className="mb-4 text-xl font-bold text-gray-900">📈 Défauts vs Retards</h2>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={lineData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis yAxisId="left" />
+                  <YAxis yAxisId="right" orientation="right" />
+                  <Tooltip />
+                  <Legend />
+                  <Line yAxisId="left" type="monotone" dataKey="defauts" stroke="#ef4444" strokeWidth={2} name="Défauts (%)" dot={{ r: 4 }} />
+                  <Line yAxisId="right" type="monotone" dataKey="retards" stroke="#3b82f6" strokeWidth={2} name="Retards (j)" dot={{ r: 4 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Graphique Comparaison Méthodes */}
+          <div className="rounded-xl bg-white p-6 shadow-lg">
+            <h2 className="mb-4 text-xl font-bold text-gray-900">🔮 Comparaison des Méthodes de Prédiction (Défauts %)</h2>
+            <ResponsiveContainer width="100%" height={350}>
+              <BarChart data={predictionCompareData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="Moy. Glissante" fill="#f97316" />
+                <Bar dataKey="Régression" fill="#3b82f6" />
+                <Bar dataKey="Exponentielle" fill="#8b5cf6" />
+                <Bar dataKey="Finale" fill="#10b981" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* ========== ÉCRAN 3 : PRÉDICTIONS ========== */}
+      {activeScreen === 'predictions' && (
+        <div className="space-y-6">
+          <div className="rounded-xl bg-white p-8 shadow-lg">
+            <h2 className="mb-2 text-2xl font-bold text-gray-900">🔮 Prédictions Avancées</h2>
+            <p className="mb-6 text-gray-600">3 méthodes : Moyenne Glissante | Régression Linéaire | Exponentielle Lissée</p>
+            
+            <div className="grid gap-6">
+              {predictions.map((pred) => (
+                <div key={pred.supplier} className="rounded-lg border-2 border-blue-200 p-6 bg-blue-50">
+                  <div className="flex justify-between items-start mb-4">
+                    <h3 className="text-xl font-bold text-gray-900">{pred.supplier}</h3>
+                    <span className={`px-3 py-1 rounded-full text-sm font-semibold ${
+                      pred.confiance === 'haute' ? 'bg-green-100 text-green-700' :
+                      pred.confiance === 'moyenne' ? 'bg-yellow-100 text-yellow-700' :
+                      'bg-red-100 text-red-700'
+                    }`}>
+                      Confiance: {pred.confiance}
+                    </span>
+                  </div>
+                  
+                  <div className="grid md:grid-cols-2 gap-6">
+                    {/* Défauts */}
+                    <div className="space-y-2">
+                      <p className="font-semibold text-gray-700">📊 Prédiction Défauts</p>
+                      <div className="space-y-1 text-sm">
+                        <div className="flex justify-between p-2 bg-white rounded border">
+                          <span>Moyenne Glissante</span>
+                          <span className="font-bold text-orange-600">{pred.method_ma_defect}%</span>
+                        </div>
+                        <div className="flex justify-between p-2 bg-white rounded border">
+                          <span>Régression Linéaire</span>
+                          <span className="font-bold text-blue-600">{pred.method_lr_defect}%</span>
+                        </div>
+                        <div className="flex justify-between p-2 bg-white rounded border">
+                          <span>Exponentielle</span>
+                          <span className="font-bold text-purple-600">{pred.method_exp_defect}%</span>
+                        </div>
+                        <div className="flex justify-between p-3 bg-green-100 rounded font-bold border-2 border-green-300">
+                          <span>🎯 FINALE</span>
+                          <span className="text-green-700">{pred.predicted_defect}%</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Retards */}
+                    <div className="space-y-2">
+                      <p className="font-semibold text-gray-700">⏱️ Prédiction Retards</p>
+                      <div className="space-y-1 text-sm">
+                        <div className="flex justify-between p-2 bg-white rounded border">
+                          <span>Moyenne Glissante</span>
+                          <span className="font-bold text-orange-600">{pred.method_ma_delay}j</span>
+                        </div>
+                        <div className="flex justify-between p-2 bg-white rounded border">
+                          <span>Régression Linéaire</span>
+                          <span className="font-bold text-blue-600">{pred.method_lr_delay}j</span>
+                        </div>
+                        <div className="flex justify-between p-2 bg-white rounded border">
+                          <span>Exponentielle</span>
+                          <span className="font-bold text-purple-600">{pred.method_exp_delay}j</span>
+                        </div>
+                        <div className="flex justify-between p-3 bg-green-100 rounded font-bold border-2 border-green-300">
+                          <span>🎯 FINALE</span>
+                          <span className="text-green-700">{pred.predicted_delay}j</span>
                         </div>
                       </div>
                     </div>
                   </div>
                   
-                  <div className="text-right">
-                    <p className="text-sm text-gray-600">Score de risque</p>
-                    <p className="text-4xl font-bold">{supplier.score_risque}</p>
-                    <p className="mt-1 text-xs text-gray-600">{supplier.nb_commandes} commandes</p>
-                    <p className="text-xs text-gray-500">Dernière: {supplier.derniere_commande}</p>
-                  </div>
+                  <p className="mt-4 text-xs text-gray-500">Historique: {pred.nb_commandes_historique} commandes</p>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
+      )}
 
-        {/* Actions (1 colonne) */}
-        <div className="lg:col-span-1">
-          <h2 className="mb-4 text-2xl font-bold text-gray-900">
-            ⚡ Actions recommandées
-          </h2>
-          <div className="space-y-3">
-            {actions.slice(0, 10).map((action, idx) => (
-              <div
-                key={idx}
-                className="rounded-lg bg-white p-4 shadow-md transition-all hover:shadow-lg"
-              >
-                <div className="flex items-start gap-3">
-                  <span className={`mt-1 rounded-full px-2.5 py-1 text-xs font-bold ${getPriorityColor(action.priority)}`}>
-                    {action.priority.toUpperCase()}
-                  </span>
-                  <div className="flex-1">
-                    <p className="font-semibold text-gray-900">{action.action}</p>
-                    <p className="mt-1 text-sm text-gray-600">{action.raison}</p>
-                    <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
-                      <span>⏱️ {action.delai}</span>
-                      <span>📊 Impact: {action.impact}</span>
-                    </div>
-                  </div>
+      {/* ========== ÉCRAN 4 : DISTRIBUTION (PIE CHART CORRIGÉ) ========== */}
+      {activeScreen === 'distribution' && (
+        <div className="grid gap-8 lg:grid-cols-2">
+          {/* Graphique Circulaire CORRIGÉ avec Recharts */}
+          <div className="rounded-xl bg-white p-8 shadow-lg">
+            <h2 className="mb-6 text-2xl font-bold text-gray-900">📈 Distribution des Risques</h2>
+            
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={pieData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={100}
+                  paddingAngle={5}
+                  dataKey="value"
+                  label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                >
+                  {pieData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+
+            {/* Légende détaillée */}
+            <div className="mt-6 space-y-3">
+              <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg border-2 border-green-200">
+                <div className="flex items-center gap-3">
+                  <div className="w-4 h-4 bg-green-500 rounded-full"></div>
+                  <span className="font-semibold">Risque Faible</span>
                 </div>
+                <span className="text-lg font-bold text-green-600">
+                  {suppliers.filter(s => s.niveau_risque === 'Faible').length}
+                </span>
               </div>
-            ))}
+              <div className="flex items-center justify-between p-3 bg-yellow-50 rounded-lg border-2 border-yellow-200">
+                <div className="flex items-center gap-3">
+                  <div className="w-4 h-4 bg-yellow-500 rounded-full"></div>
+                  <span className="font-semibold">Risque Modéré</span>
+                </div>
+                <span className="text-lg font-bold text-yellow-600">
+                  {suppliers.filter(s => s.niveau_risque === 'Modéré').length}
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-3 bg-red-50 rounded-lg border-2 border-red-200">
+                <div className="flex items-center gap-3">
+                  <div className="w-4 h-4 bg-red-500 rounded-full"></div>
+                  <span className="font-semibold">Risque Élevé</span>
+                </div>
+                <span className="text-lg font-bold text-red-600">
+                  {suppliers.filter(s => s.niveau_risque === 'Élevé').length}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Recommandations */}
+          <div className="rounded-xl bg-white p-8 shadow-lg">
+            <h2 className="mb-6 text-2xl font-bold text-gray-900">💡 Résumé & Recommandations</h2>
+            
+            <div className="space-y-4">
+              <div className="p-4 bg-blue-50 rounded-lg border-l-4 border-blue-500">
+                <p className="font-semibold text-blue-900 mb-2">📊 État Global</p>
+                <p className="text-sm text-blue-800">
+                  {suppliers.filter(s => s.niveau_risque === 'Élevé').length > 0 
+                    ? `${suppliers.filter(s => s.niveau_risque === 'Élevé').length} fournisseur(s) en situation critique requiert une intervention immédiate.`
+                    : 'Aucun fournisseur en risque critique. Bon maintien des normes.'
+                  }
+                </p>
+              </div>
+
+              <div className="p-4 bg-orange-50 rounded-lg border-l-4 border-orange-500">
+                <p className="font-semibold text-orange-900 mb-2">⚠️ Attention</p>
+                <p className="text-sm text-orange-800">
+                  {suppliers.filter(s => s.niveau_risque === 'Modéré').length} fournisseur(s) à surveiller pour éviter leur dégradation.
+                </p>
+              </div>
+
+              <div className="p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
+                <p className="font-semibold text-green-900 mb-2">✅ Excellent</p>
+                <p className="text-sm text-green-800">
+                  {suppliers.filter(s => s.niveau_risque === 'Faible').length} fournisseur(s) performant(s). Maintenir la relation.
+                </p>
+              </div>
+
+              <div className="mt-6 p-4 bg-gray-100 rounded-lg">
+                <p className="font-semibold text-gray-900 mb-3">📋 Actions Prioritaires</p>
+                <ul className="text-sm text-gray-700 space-y-2">
+                  <li>✓ Renforcer contrôles qualité (audit 8D si risque élevé)</li>
+                  <li>✓ Analyser tendances (hausse/baisse défauts & retards)</li>
+                  <li>✓ Planifier formation/recalibrage si nécessaire</li>
+                  <li>✓ Suivi hebdomadaire des cas modérés</li>
+                </ul>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Modal Ajout Fournisseur */}
+      {/* ========== MODAL AJOUT FOURNISSEUR ========== */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
-          <div className="w-full max-w-2xl rounded-xl bg-white p-8 shadow-2xl">
+          <div className="w-full max-w-2xl rounded-xl bg-white p-8 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="mb-6 flex items-center justify-between">
               <h2 className="text-2xl font-bold text-gray-900">➕ Ajouter un fournisseur</h2>
-              <button
-                onClick={() => setShowAddModal(false)}
-                className="rounded-full p-2 hover:bg-gray-100 transition-colors"
-              >
+              <button onClick={() => setShowAddModal(false)} className="rounded-full p-2 hover:bg-gray-100">
                 <X className="h-6 w-6" />
               </button>
             </div>
@@ -400,28 +641,27 @@ export default function SupplierDashboardPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Email *</label>
+                  <label className="block text-sm font-medium text-gray-700">Email</label>
                   <div className="relative mt-1">
                     <Mail className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
                     <input
                       type="email"
                       value={newSupplier.email}
                       onChange={(e) => setNewSupplier({ ...newSupplier, email: e.target.value })}
-                      className="w-full rounded-lg border border-gray-300 p-3 pl-10 focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                      className="w-full rounded-lg border border-gray-300 p-3 pl-10"
                       placeholder="contact@fournisseur.com"
                     />
                   </div>
                 </div>
-
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Téléphone *</label>
+                  <label className="block text-sm font-medium text-gray-700">Téléphone</label>
                   <div className="relative mt-1">
                     <Phone className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
                     <input
                       type="tel"
                       value={newSupplier.phone}
                       onChange={(e) => setNewSupplier({ ...newSupplier, phone: e.target.value })}
-                      className="w-full rounded-lg border border-gray-300 p-3 pl-10 focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                      className="w-full rounded-lg border border-gray-300 p-3 pl-10"
                       placeholder="+212 6XX XXX XXX"
                     />
                   </div>
@@ -436,7 +676,7 @@ export default function SupplierDashboardPage() {
                     type="text"
                     value={newSupplier.address}
                     onChange={(e) => setNewSupplier({ ...newSupplier, address: e.target.value })}
-                    className="w-full rounded-lg border border-gray-300 p-3 pl-10 focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                    className="w-full rounded-lg border border-gray-300 p-3 pl-10"
                     placeholder="Adresse complète"
                   />
                 </div>
@@ -447,34 +687,27 @@ export default function SupplierDashboardPage() {
                   <label className="block text-sm font-medium text-gray-700">Note Qualité</label>
                   <div className="mt-1 flex items-center gap-2">
                     <input
-                      type="range"
-                      min="1"
-                      max="10"
+                      type="range" min="1" max="10"
                       value={newSupplier.quality_rating}
                       onChange={(e) => setNewSupplier({ ...newSupplier, quality_rating: Number(e.target.value) })}
                       className="flex-1"
                     />
                     <span className="flex items-center gap-1 text-lg font-bold text-yellow-600">
-                      <Star className="h-5 w-5 fill-yellow-400" />
-                      {newSupplier.quality_rating}/10
+                      <Star className="h-5 w-5 fill-yellow-400" /> {newSupplier.quality_rating}/10
                     </span>
                   </div>
                 </div>
-
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Note Livraison</label>
                   <div className="mt-1 flex items-center gap-2">
                     <input
-                      type="range"
-                      min="1"
-                      max="10"
+                      type="range" min="1" max="10"
                       value={newSupplier.delivery_rating}
                       onChange={(e) => setNewSupplier({ ...newSupplier, delivery_rating: Number(e.target.value) })}
                       className="flex-1"
                     />
                     <span className="flex items-center gap-1 text-lg font-bold text-blue-600">
-                      <Clock className="h-5 w-5" />
-                      {newSupplier.delivery_rating}/10
+                      <Clock className="h-5 w-5" /> {newSupplier.delivery_rating}/10
                     </span>
                   </div>
                 </div>
@@ -488,29 +721,23 @@ export default function SupplierDashboardPage() {
                     value={newSupplier.notes}
                     onChange={(e) => setNewSupplier({ ...newSupplier, notes: e.target.value })}
                     rows={3}
-                    className="w-full rounded-lg border border-gray-300 p-3 pl-10 focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
-                    placeholder="Remarques ou informations supplémentaires..."
+                    className="w-full rounded-lg border border-gray-300 p-3 pl-10"
+                    placeholder="Remarques..."
                   />
                 </div>
-              </div>
-
-              <div className="rounded-lg bg-yellow-50 p-4">
-                <p className="text-sm text-yellow-800">
-                  ⚠️ <strong>Note:</strong> Les fournisseurs sont désormais enregistrés dans PostgreSQL Supabase local. Assurez-vous que la base est démarrée avant l&apos;ajout.
-                </p>
               </div>
             </div>
 
             <div className="mt-6 flex gap-3">
               <button
                 onClick={handleAddSupplier}
-                className="flex-1 rounded-lg bg-green-600 px-6 py-3 font-semibold text-white hover:bg-green-700 transition-colors"
+                className="flex-1 rounded-lg bg-green-600 px-6 py-3 font-semibold text-white hover:bg-green-700"
               >
                 ✅ Ajouter le fournisseur
               </button>
               <button
                 onClick={() => setShowAddModal(false)}
-                className="rounded-lg border-2 border-gray-300 px-6 py-3 font-semibold text-gray-700 hover:bg-gray-100 transition-colors"
+                className="rounded-lg border-2 border-gray-300 px-6 py-3 font-semibold text-gray-700 hover:bg-gray-100"
               >
                 Annuler
               </button>

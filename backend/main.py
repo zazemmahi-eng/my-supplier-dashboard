@@ -1,8 +1,8 @@
+#main.py
 import sys
 import os
 from pathlib import Path
 
-# Ajouter le dossier parent au path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -14,36 +14,33 @@ from sqlalchemy.orm import Session
 from datetime import datetime, date
 import uuid
 
-# ✅ Imports corrigés
 from backend.mon_analyse import (
     charger_donnees,
     calculer_kpis_globaux,
     calculer_risques_fournisseurs,
     obtenir_actions_recommandees,
-    calculer_predictions,
+    calculer_predictions_avancees,
     obtenir_detail_fournisseur,
-    calculer_stats_periode
+    calculer_stats_periode,
+    calculer_distribution_risques,
+    comparer_methodes_prediction
 )
 
 from backend.models import Supplier, Order, Account
 from backend.database import get_db, init_db
 
-# ... reste du code
-
 # ============================================
 # CONFIGURATION FASTAPI
 # ============================================
 
-# Initialiser les tables au démarrage
 init_db()
 
 app = FastAPI(
-    title="API Fournisseurs - Analyse Prédictive",
-    version="2.0.0",
-    description="Backend servant les données de retard et de défauts pour le dashboard Next.js."
+    title="API Fournisseurs - Analyse Prédictive Avancée",
+    version="3.0.0",
+    description="Backend avec prédictions avancées (Moyenne Glissante + Régression Linéaire + Exponentielle Lissée)"
 )
 
-# CORS
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -58,7 +55,7 @@ app.add_middleware(
 )
 
 # ============================================
-# MODÈLES PYDANTIC (Validation)
+# MODÈLES PYDANTIC
 # ============================================
 
 class SupplierBase(BaseModel):
@@ -91,8 +88,8 @@ class OrderCreate(BaseModel):
 class OrderRead(BaseModel):
     id: uuid.UUID
     supplier_id: uuid.UUID
-    date_promised: datetime  # Modifié en datetime pour correspondre au modèle SQL
-    date_delivered: Optional[datetime] # Modifié en datetime
+    date_promised: datetime
+    date_delivered: Optional[datetime]
     defects: float
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
@@ -104,15 +101,16 @@ class OrderRead(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Vérifie la connexion à la base de données au démarrage"""
-    print("🚀 Démarrage de l'API Fournisseurs...")
+    print("🚀 Démarrage de l'API Fournisseurs v3.0...")
     try:
         db = next(get_db())
         supplier_count = db.query(Supplier).count()
         order_count = db.query(Order).count()
         print(f"✅ Connexion réussie : {supplier_count} fournisseurs, {order_count} commandes")
+        print(f"📊 Prédictions: Moyenne Glissante + Régression Linéaire + Exponentielle Lissée")
         db.close()
     except Exception as e:
-        print(f"⚠️ Attention : Problème de connexion à la base : {e}")
+        print(f"⚠️ Attention : Problème de connexion : {e}")
 
 # ============================================
 # ENDPOINTS DE BASE
@@ -121,17 +119,16 @@ async def startup_event():
 @app.get("/")
 async def root():
     return {
-        "message": "API Fournisseurs - Analyse Prédictive",
-        "version": "2.0.0",
-        "database": "PostgreSQL via SQLAlchemy",
-        "endpoints": {
-            "dashboard": "/api/dashboard/data",
-            "predictions": "/api/predictions",
-            "suppliers": "/api/suppliers/list",
-            "create_supplier": "/api/supplier/create",
-            "create_order": "/api/order/create",
-            "demo_data": "/api/demo/populate"
-        }
+        "message": "API Fournisseurs - Analyse Prédictive Avancée",
+        "version": "3.0.0",
+        "features": [
+            "KPIs globaux",
+            "Scoring de risque",
+            "Prédictions avancées (3 méthodes)",
+            "Distribution des risques",
+            "Actions recommandées",
+            "Comparaison méthodes"
+        ]
     }
 
 @app.get("/health")
@@ -143,7 +140,7 @@ async def health_check(db: Session = Depends(get_db)):
         
         return {
             "status": "healthy",
-            "version": "2.0.0",
+            "version": "3.0.0",
             "timestamp": datetime.now(),
             "database": {
                 "status": "connected",
@@ -154,12 +151,7 @@ async def health_check(db: Session = Depends(get_db)):
     except Exception as e:
         return {
             "status": "unhealthy",
-            "version": "2.0.0",
-            "timestamp": datetime.now(),
-            "database": {
-                "status": "error",
-                "error": str(e)
-            }
+            "error": str(e)
         }
 
 # ============================================
@@ -190,17 +182,39 @@ async def get_predictions(
     fenetre: int = Query(3, ge=1, le=10), 
     db: Session = Depends(get_db)
 ):
-    """Prédictions par moyenne glissante"""
+    """Prédictions avancées (3 méthodes combinées)"""
     try:
         df = charger_donnees(db)
-        predictions = calculer_predictions(df, fenetre=fenetre)
+        predictions = calculer_predictions_avancees(df, fenetre=fenetre)
         return {
             "predictions": predictions,
             "fenetre": fenetre,
-            "methode": "moyenne_glissante"
+            "methodes": [
+                "moyenne_glissante",
+                "regression_lineaire",
+                "exponentielle_lissee"
+            ],
+            "note": "Les 3 méthodes sont combinées pour une prédiction plus robuste"
         }
     except Exception as e:
         print(f"❌ Erreur dans get_predictions: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur : {str(e)}")
+
+@app.get("/api/predictions/compare/{supplier_name}", response_model=Dict[str, Any])
+async def compare_prediction_methods(supplier_name: str, db: Session = Depends(get_db)):
+    """Compare les 3 méthodes de prédiction pour un fournisseur"""
+    try:
+        df = charger_donnees(db)
+        comparison = comparer_methodes_prediction(df, supplier_name)
+        
+        if not comparison:
+            raise HTTPException(status_code=404, detail=f"Fournisseur '{supplier_name}' non trouvé")
+        
+        return comparison
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Erreur dans compare_prediction_methods: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur : {str(e)}")
 
 @app.get("/api/supplier/{supplier_name}", response_model=Dict[str, Any])
@@ -240,6 +254,22 @@ async def get_actions(db: Session = Depends(get_db)):
         }
     except Exception as e:
         print(f"❌ Erreur dans get_actions: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur : {str(e)}")
+
+@app.get("/api/distribution", response_model=Dict[str, Any])
+async def get_distribution(db: Session = Depends(get_db)):
+    """Distribution des niveaux de risque"""
+    try:
+        df = charger_donnees(db)
+        risques = calculer_risques_fournisseurs(df)
+        distribution = calculer_distribution_risques(risques)
+        
+        return {
+            "distribution": distribution,
+            "total_suppliers": len(risques)
+        }
+    except Exception as e:
+        print(f"❌ Erreur dans get_distribution: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur : {str(e)}")
 
 @app.get("/api/stats", response_model=Dict[str, Any])
@@ -289,7 +319,7 @@ async def create_supplier(
     supplier: SupplierCreate, 
     db: Session = Depends(get_db)
 ):
-    """Création d'un fournisseur (persistant en base de données)"""
+    """Création d'un fournisseur"""
     try:
         existing = db.query(Supplier).filter(Supplier.name == supplier.name).first()
         if existing:
@@ -307,12 +337,12 @@ async def create_supplier(
         raise
     except Exception as e:
         db.rollback()
-        print(f"❌ Erreur lors de la création du fournisseur: {e}")
+        print(f"❌ Erreur lors de la création: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur : {str(e)}")
 
 @app.get("/api/supplier/static/list", response_model=List[SupplierRead])
 async def get_static_suppliers(db: Session = Depends(get_db)):
-    """Liste des fournisseurs enregistrés en base de données"""
+    """Liste des fournisseurs en base de données"""
     try:
         suppliers = db.query(Supplier).all()
         return suppliers
@@ -322,7 +352,7 @@ async def get_static_suppliers(db: Session = Depends(get_db)):
 
 @app.delete("/api/supplier/static/{name}", response_model=Dict[str, str])
 async def delete_static_supplier(name: str, db: Session = Depends(get_db)):
-    """Supprime un fournisseur de la base de données"""
+    """Supprime un fournisseur"""
     try:
         db_supplier = db.query(Supplier).filter(Supplier.name == name).first()
         
@@ -361,7 +391,6 @@ async def create_order(
 ):
     """Créer une nouvelle commande"""
     try:
-        # Vérifier que le fournisseur existe
         supplier = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
         if not supplier:
             raise HTTPException(status_code=404, detail="Fournisseur introuvable")
@@ -378,7 +407,7 @@ async def create_order(
         raise
     except Exception as e:
         db.rollback()
-        print(f"❌ Erreur lors de la création de la commande: {e}")
+        print(f"❌ Erreur lors de la création: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur : {str(e)}")
 
 @app.get("/api/orders/list")
@@ -386,7 +415,7 @@ async def get_orders_list(
     supplier_id: Optional[uuid.UUID] = None,
     db: Session = Depends(get_db)
 ):
-    """Liste des commandes avec filtrage optionnel par fournisseur"""
+    """Liste des commandes"""
     try:
         query = db.query(Order)
         
@@ -409,10 +438,7 @@ async def get_orders_list(
 
 @app.post("/api/demo/populate")
 async def populate_demo_data(db: Session = Depends(get_db)):
-    """
-    Insère des données de démonstration dans la base
-    (Fournisseurs + Commandes)
-    """
+    """Insère des données de démonstration"""
     try:
         existing_count = db.query(Supplier).count()
         if existing_count > 0:
@@ -422,13 +448,12 @@ async def populate_demo_data(db: Session = Depends(get_db)):
                 "note": "Utilisez DELETE /api/demo/reset pour réinitialiser"
             }
         
-        # Créer les fournisseurs
         suppliers_data = [
             {"name": "Fournisseur A", "email": "a@example.com", "quality_rating": 8, "delivery_rating": 7},
-            {"name": "Fournisseur B", "email": "b@example.com", "quality_rating": 6, "delivery_rating": 5},
+            {"name": "Fournisseur B (Dérive)", "email": "b@example.com", "quality_rating": 6, "delivery_rating": 5},
             {"name": "Fournisseur C", "email": "c@example.com", "quality_rating": 9, "delivery_rating": 9},
-            {"name": "Fournisseur D", "email": "d@example.com", "quality_rating": 5, "delivery_rating": 6},
-            {"name": "Fournisseur E", "email": "e@example.com", "quality_rating": 7, "delivery_rating": 5},
+            {"name": "Fournisseur D (Retards)", "email": "d@example.com", "quality_rating": 5, "delivery_rating": 3},
+            {"name": "Fournisseur E", "email": "e@example.com", "quality_rating": 7, "delivery_rating": 6},
             {"name": "Fournisseur F", "email": "f@example.com", "quality_rating": 6, "delivery_rating": 6},
         ]
         
@@ -443,33 +468,54 @@ async def populate_demo_data(db: Session = Depends(get_db)):
         for supplier in created_suppliers:
             db.refresh(supplier)
         
-        # Créer des commandes
-        orders_data = [
-            # Fournisseur A
-            {"supplier_id": created_suppliers[0].id, "date_promised": date(2024, 1, 1), "date_delivered": date(2024, 1, 3), "defects": 0.02},
-            {"supplier_id": created_suppliers[0].id, "date_promised": date(2024, 1, 5), "date_delivered": date(2024, 1, 6), "defects": 0.01},
-            {"supplier_id": created_suppliers[0].id, "date_promised": date(2024, 1, 10), "date_delivered": date(2024, 1, 10), "defects": 0.01},
-            # Fournisseur B
-            {"supplier_id": created_suppliers[1].id, "date_promised": date(2024, 1, 2), "date_delivered": date(2024, 1, 10), "defects": 0.05},
-            {"supplier_id": created_suppliers[1].id, "date_promised": date(2024, 1, 7), "date_delivered": date(2024, 1, 8), "defects": 0.03},
-            {"supplier_id": created_suppliers[1].id, "date_promised": date(2024, 1, 12), "date_delivered": date(2024, 1, 14), "defects": 0.04},
-            # Fournisseur C
-            {"supplier_id": created_suppliers[2].id, "date_promised": date(2024, 1, 3), "date_delivered": date(2024, 1, 3), "defects": 0.00},
-            {"supplier_id": created_suppliers[2].id, "date_promised": date(2024, 1, 8), "date_delivered": date(2024, 1, 9), "defects": 0.01},
-            # Fournisseur D (dérive qualité)
-            {"supplier_id": created_suppliers[3].id, "date_promised": date(2024, 1, 5), "date_delivered": date(2024, 1, 6), "defects": 0.01},
-            {"supplier_id": created_suppliers[3].id, "date_promised": date(2024, 1, 10), "date_delivered": date(2024, 1, 11), "defects": 0.04},
-            {"supplier_id": created_suppliers[3].id, "date_promised": date(2024, 1, 15), "date_delivered": date(2024, 1, 17), "defects": 0.09},
-            # Fournisseur E (retards)
-            {"supplier_id": created_suppliers[4].id, "date_promised": date(2024, 1, 1), "date_delivered": date(2024, 1, 1), "defects": 0.01},
-            {"supplier_id": created_suppliers[4].id, "date_promised": date(2024, 1, 10), "date_delivered": date(2024, 1, 18), "defects": 0.01},
-            {"supplier_id": created_suppliers[4].id, "date_promised": date(2024, 1, 20), "date_delivered": date(2024, 1, 28), "defects": 0.01},
-            # Fournisseur F
-            {"supplier_id": created_suppliers[5].id, "date_promised": date(2024, 1, 3), "date_delivered": date(2024, 1, 5), "defects": 0.03},
-            {"supplier_id": created_suppliers[5].id, "date_promised": date(2024, 1, 8), "date_delivered": date(2024, 1, 10), "defects": 0.04},
+        # Scénario 1: Fournisseur A stable (bon)
+        orders_a = [
+            {"supplier_id": created_suppliers[0].id, "date_promised": date(2024, 1, 1), "date_delivered": date(2024, 1, 2), "defects": 0.01},
+            {"supplier_id": created_suppliers[0].id, "date_promised": date(2024, 1, 5), "date_delivered": date(2024, 1, 5), "defects": 0.01},
+            {"supplier_id": created_suppliers[0].id, "date_promised": date(2024, 1, 10), "date_delivered": date(2024, 1, 11), "defects": 0.00},
+            {"supplier_id": created_suppliers[0].id, "date_promised": date(2024, 1, 15), "date_delivered": date(2024, 1, 16), "defects": 0.02},
         ]
         
-        for o_data in orders_data:
+        # Scénario 2: Fournisseur B - DÉRIVE QUALITÉ (Défauts augmentent)
+        orders_b = [
+            {"supplier_id": created_suppliers[1].id, "date_promised": date(2024, 1, 2), "date_delivered": date(2024, 1, 3), "defects": 0.02},
+            {"supplier_id": created_suppliers[1].id, "date_promised": date(2024, 1, 8), "date_delivered": date(2024, 1, 9), "defects": 0.04},
+            {"supplier_id": created_suppliers[1].id, "date_promised": date(2024, 1, 15), "date_delivered": date(2024, 1, 16), "defects": 0.07},
+            {"supplier_id": created_suppliers[1].id, "date_promised": date(2024, 1, 22), "date_delivered": date(2024, 1, 23), "defects": 0.10},
+        ]
+        
+        # Scénario 3: Fournisseur C excellent
+        orders_c = [
+            {"supplier_id": created_suppliers[2].id, "date_promised": date(2024, 1, 3), "date_delivered": date(2024, 1, 3), "defects": 0.00},
+            {"supplier_id": created_suppliers[2].id, "date_promised": date(2024, 1, 10), "date_delivered": date(2024, 1, 10), "defects": 0.00},
+            {"supplier_id": created_suppliers[2].id, "date_promised": date(2024, 1, 17), "date_delivered": date(2024, 1, 17), "defects": 0.00},
+            {"supplier_id": created_suppliers[2].id, "date_promised": date(2024, 1, 24), "date_delivered": date(2024, 1, 24), "defects": 0.01},
+        ]
+        
+        # Scénario 4: Fournisseur D - RETARDS (Délais augmentent au milieu)
+        orders_d = [
+            {"supplier_id": created_suppliers[3].id, "date_promised": date(2024, 1, 5), "date_delivered": date(2024, 1, 5), "defects": 0.02},
+            {"supplier_id": created_suppliers[3].id, "date_promised": date(2024, 1, 12), "date_delivered": date(2024, 1, 16), "defects": 0.03},
+            {"supplier_id": created_suppliers[3].id, "date_promised": date(2024, 1, 19), "date_delivered": date(2024, 1, 26), "defects": 0.02},
+            {"supplier_id": created_suppliers[3].id, "date_promised": date(2024, 1, 26), "date_delivered": date(2024, 2, 2), "defects": 0.03},
+        ]
+        
+        # Autres fournisseurs
+        orders_e = [
+            {"supplier_id": created_suppliers[4].id, "date_promised": date(2024, 1, 4), "date_delivered": date(2024, 1, 4), "defects": 0.01},
+            {"supplier_id": created_suppliers[4].id, "date_promised": date(2024, 1, 11), "date_delivered": date(2024, 1, 12), "defects": 0.02},
+            {"supplier_id": created_suppliers[4].id, "date_promised": date(2024, 1, 18), "date_delivered": date(2024, 1, 18), "defects": 0.01},
+        ]
+        
+        orders_f = [
+            {"supplier_id": created_suppliers[5].id, "date_promised": date(2024, 1, 6), "date_delivered": date(2024, 1, 7), "defects": 0.03},
+            {"supplier_id": created_suppliers[5].id, "date_promised": date(2024, 1, 13), "date_delivered": date(2024, 1, 14), "defects": 0.02},
+            {"supplier_id": created_suppliers[5].id, "date_promised": date(2024, 1, 20), "date_delivered": date(2024, 1, 21), "defects": 0.03},
+        ]
+        
+        all_orders = orders_a + orders_b + orders_c + orders_d + orders_e + orders_f
+        
+        for o_data in all_orders:
             order = Order(**o_data)
             db.add(order)
         
@@ -479,22 +525,27 @@ async def populate_demo_data(db: Session = Depends(get_db)):
         order_count = db.query(Order).count()
         
         return {
-            "message": "✅ Données de démonstration insérées avec succès",
+            "message": "✅ Données de démonstration avec scénarios réalistes",
             "suppliers_created": supplier_count,
-            "orders_created": order_count
+            "orders_created": order_count,
+            "scenarios": {
+                "fournisseur_a": "Stable et fiable",
+                "fournisseur_b": "⚠️ DÉRIVE: Défauts augmentent progressivement",
+                "fournisseur_c": "Excellent partenaire",
+                "fournisseur_d": "⚠️ RETARDS: Délais augmentent au milieu de la période",
+                "fournisseur_e": "Normal",
+                "fournisseur_f": "Normal"
+            }
         }
     
     except Exception as e:
         db.rollback()
-        print(f"❌ Erreur lors de l'insertion des données de démo: {e}")
+        print(f"❌ Erreur lors de l'insertion: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur : {str(e)}")
 
 @app.delete("/api/demo/reset")
 async def reset_demo_data(db: Session = Depends(get_db)):
-    """
-    Supprime TOUTES les données (fournisseurs et commandes)
-    ⚠️ ATTENTION : Action irréversible !
-    """
+    """Réinitialise la base de données"""
     try:
         order_count = db.query(Order).delete()
         supplier_count = db.query(Supplier).delete()
