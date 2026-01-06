@@ -30,12 +30,12 @@ class Settings(BaseSettings):
 
 try:
     settings = Settings()
-    print(f"✅ Configuration chargée depuis : {env_path}")
+    print(f"[OK] Configuration chargée depuis : {env_path}")
 except Exception as e:
-    print(f"❌ ERREUR: Impossible de charger les settings.")
-    print(f"📁 Chemin recherché : {env_path}")
-    print(f"⚠️ Vérifiez que le fichier .env existe et contient DATABASE_URL")
-    print(f"🔴 Erreur Pydantic: {e}")
+    print(f"[ERROR] ERREUR: Impossible de charger les settings.")
+    print(f"[PATH] Chemin recherché : {env_path}")
+    print(f"[WARNING] Vérifiez que le fichier .env existe et contient DATABASE_URL")
+    print(f"[CRITICAL] Erreur Pydantic: {e}")
     exit(1)
 
 # ============================================
@@ -87,13 +87,13 @@ def test_connection():
     """Teste la connexion à la base de données"""
     try:
         db = SessionLocal()
-        # ⚠️ CORRECTION : Utiliser text() pour les requêtes SQL brutes
+        # CORRECTION : Utiliser text() pour les requêtes SQL brutes
         result = db.execute(text("SELECT 1")).scalar()
         db.close()
-        print(f"✅ Connexion à la base de données réussie (test: {result})")
+        print(f"[OK] Connexion à la base de données réussie (test: {result})")
         return True
     except Exception as e:
-        print(f"❌ Erreur de connexion à la base de données : {e}")
+        print(f"[ERROR] Erreur de connexion à la base de données : {e}")
         return False
 
 # ============================================
@@ -107,6 +107,6 @@ def init_db():
     """
     try:
         Base.metadata.create_all(bind=engine)
-        print("✅ Tables de base de données créées/vérifiées")
+        print("[OK] Tables de base de données créées/vérifiées")
     except Exception as e:
-        print(f"❌ Erreur lors de la création des tables : {e}")
+        print(f"[ERROR] Erreur lors de la création des tables : {e}")

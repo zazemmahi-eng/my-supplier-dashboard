@@ -2,14 +2,15 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts';
 import {
   TrendingUp, TrendingDown, AlertTriangle, Clock, CheckCircle,
   Package, Activity, Plus, X, Mail, Phone, MapPin, FileText, Star,
-  BarChart3, PieChart as PieChartIcon, LineChart as LineChartIcon
+  BarChart3, PieChart as PieChartIcon, LineChart as LineChartIcon, Upload, RotateCcw
 } from 'lucide-react';
+import DataUploadLanding from '~/components/DataUploadLanding';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_SUPPLIER_API_URL ?? 'http://127.0.0.1:8000';
 
@@ -67,7 +68,7 @@ type Screen = 'overview' | 'charts' | 'predictions' | 'distribution';
 
 const COLORS = {
   good: '#10b981',
-  warning: '#f59e0b', 
+  warning: '#f59e0b',
   alert: '#ef4444',
   faible: '#10b981',
   modere: '#f59e0b',
@@ -89,16 +90,53 @@ export default function SupplierDashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newSupplier, setNewSupplier] = useState(CreateSupplierPayload);
+  const [dataLoaded, setDataLoaded] = useState<boolean | null>(null);
+  const [dataSource, setDataSource] = useState<string>('database');
 
   useEffect(() => {
-    fetchData();
+    checkDataStatus();
   }, []);
+
+  const handleUploadSuccess = async () => {
+    setDataLoaded(true);
+    await fetchData();
+  };
+
+  const handleResetData = async () => {
+    try {
+      await axios.delete(`${API_BASE_URL}/api/data`);
+      setDataLoaded(false);
+      setKpis(null);
+      setSuppliers([]);
+      setPredictions([]);
+      setActions([]);
+    } catch (err) {
+      console.error('Erreur lors de la réinitialisation:', err);
+    }
+  };
+
+  const checkDataStatus = async () => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/data-status`);
+      if (response.data.has_data) {
+        setDataLoaded(true);
+        fetchData();
+      } else {
+        setDataLoaded(false);
+        setLoading(false);
+      }
+    } catch {
+      // If status check fails, assume no data and show landing
+      setDataLoaded(false);
+      setLoading(false);
+    }
+  };
 
   const fetchData = async () => {
     try {
       setLoading(true);
       setError(null);
-      
+
       const [dashboardRes, predictionsRes] = await Promise.all([
         axios.get(`${API_BASE_URL}/api/dashboard/data`),
         axios.get(`${API_BASE_URL}/api/predictions`)
@@ -132,7 +170,7 @@ export default function SupplierDashboardPage() {
   };
 
   // ============== DONNÉES POUR GRAPHIQUES ==============
-  
+
   // Graphique circulaire (Pie Chart)
   const pieData = [
     { name: 'Faible', value: suppliers.filter(s => s.niveau_risque === 'Faible').length, color: COLORS.faible },
@@ -215,18 +253,31 @@ export default function SupplierDashboardPage() {
     );
   }
 
+  // Show landing page when no data is loaded
+  if (dataLoaded === false) {
+    return <DataUploadLanding onUploadSuccess={handleUploadSuccess} />;
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 p-6">
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-4xl font-bold text-gray-900">📊 Dashboard Prédictif</h1>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 rounded-lg bg-green-600 px-5 py-2.5 font-semibold text-white shadow-lg hover:bg-green-700"
-          >
-            <Plus className="h-5 w-5" /> Ajouter fournisseur
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleResetData}
+              className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2.5 font-semibold text-white shadow-lg hover:bg-orange-600 transition-colors"
+            >
+              <RotateCcw className="h-4 w-4" /> Nouvelles données
+            </button>
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-2 rounded-lg bg-green-600 px-5 py-2.5 font-semibold text-white shadow-lg hover:bg-green-700"
+            >
+              <Plus className="h-5 w-5" /> Ajouter fournisseur
+            </button>
+          </div>
         </div>
 
         {/* Navigation */}
@@ -240,11 +291,10 @@ export default function SupplierDashboardPage() {
             <button
               key={key}
               onClick={() => setActiveScreen(key as Screen)}
-              className={`flex items-center gap-2 rounded-lg px-5 py-2.5 font-semibold transition-all ${
-                activeScreen === key
-                  ? 'bg-blue-600 text-white shadow-lg'
-                  : 'bg-white text-gray-700 hover:bg-gray-100 shadow'
-              }`}
+              className={`flex items-center gap-2 rounded-lg px-5 py-2.5 font-semibold transition-all ${activeScreen === key
+                ? 'bg-blue-600 text-white shadow-lg'
+                : 'bg-white text-gray-700 hover:bg-gray-100 shadow'
+                }`}
             >
               <Icon className="h-5 w-5" /> {label}
             </button>
@@ -318,10 +368,9 @@ export default function SupplierDashboardPage() {
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-3">
                           <h3 className="text-xl font-bold">{supplier.supplier}</h3>
-                          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                            supplier.status === 'good' ? 'bg-green-200' :
+                          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${supplier.status === 'good' ? 'bg-green-200' :
                             supplier.status === 'warning' ? 'bg-yellow-200' : 'bg-red-200'
-                          }`}>
+                            }`}>
                             {supplier.niveau_risque}
                           </span>
                         </div>
@@ -442,21 +491,20 @@ export default function SupplierDashboardPage() {
           <div className="rounded-xl bg-white p-8 shadow-lg">
             <h2 className="mb-2 text-2xl font-bold text-gray-900">🔮 Prédictions Avancées</h2>
             <p className="mb-6 text-gray-600">3 méthodes : Moyenne Glissante | Régression Linéaire | Exponentielle Lissée</p>
-            
+
             <div className="grid gap-6">
               {predictions.map((pred) => (
                 <div key={pred.supplier} className="rounded-lg border-2 border-blue-200 p-6 bg-blue-50">
                   <div className="flex justify-between items-start mb-4">
                     <h3 className="text-xl font-bold text-gray-900">{pred.supplier}</h3>
-                    <span className={`px-3 py-1 rounded-full text-sm font-semibold ${
-                      pred.confiance === 'haute' ? 'bg-green-100 text-green-700' :
+                    <span className={`px-3 py-1 rounded-full text-sm font-semibold ${pred.confiance === 'haute' ? 'bg-green-100 text-green-700' :
                       pred.confiance === 'moyenne' ? 'bg-yellow-100 text-yellow-700' :
-                      'bg-red-100 text-red-700'
-                    }`}>
+                        'bg-red-100 text-red-700'
+                      }`}>
                       Confiance: {pred.confiance}
                     </span>
                   </div>
-                  
+
                   <div className="grid md:grid-cols-2 gap-6">
                     {/* Défauts */}
                     <div className="space-y-2">
@@ -504,7 +552,7 @@ export default function SupplierDashboardPage() {
                       </div>
                     </div>
                   </div>
-                  
+
                   <p className="mt-4 text-xs text-gray-500">Historique: {pred.nb_commandes_historique} commandes</p>
                 </div>
               ))}
@@ -519,7 +567,7 @@ export default function SupplierDashboardPage() {
           {/* Graphique Circulaire CORRIGÉ avec Recharts */}
           <div className="rounded-xl bg-white p-8 shadow-lg">
             <h2 className="mb-6 text-2xl font-bold text-gray-900">📈 Distribution des Risques</h2>
-            
+
             <ResponsiveContainer width="100%" height={300}>
               <PieChart>
                 <Pie
@@ -576,12 +624,12 @@ export default function SupplierDashboardPage() {
           {/* Recommandations */}
           <div className="rounded-xl bg-white p-8 shadow-lg">
             <h2 className="mb-6 text-2xl font-bold text-gray-900">💡 Résumé & Recommandations</h2>
-            
+
             <div className="space-y-4">
               <div className="p-4 bg-blue-50 rounded-lg border-l-4 border-blue-500">
                 <p className="font-semibold text-blue-900 mb-2">📊 État Global</p>
                 <p className="text-sm text-blue-800">
-                  {suppliers.filter(s => s.niveau_risque === 'Élevé').length > 0 
+                  {suppliers.filter(s => s.niveau_risque === 'Élevé').length > 0
                     ? `${suppliers.filter(s => s.niveau_risque === 'Élevé').length} fournisseur(s) en situation critique requiert une intervention immédiate.`
                     : 'Aucun fournisseur en risque critique. Bon maintien des normes.'
                   }

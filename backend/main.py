@@ -28,6 +28,7 @@ from backend.mon_analyse import (
 
 from backend.models import Supplier, Order, Account
 from backend.database import get_db, init_db
+from backend.upload_routes import router as upload_router, get_uploaded_data
 
 # ============================================
 # CONFIGURATION FASTAPI
@@ -53,6 +54,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include upload router
+app.include_router(upload_router)
 
 # ============================================
 # MODÈLES PYDANTIC
@@ -160,9 +164,15 @@ async def health_check(db: Session = Depends(get_db)):
 
 @app.get("/api/dashboard/data", response_model=Dict[str, Any])
 async def get_dashboard_data(db: Session = Depends(get_db)):
-    """Endpoint principal du dashboard"""
+    """Endpoint principal du dashboard - utilise uploaded data si disponible"""
     try:
-        df = charger_donnees(db)
+        # Check for uploaded data first
+        uploaded_df = get_uploaded_data()
+        if uploaded_df is not None and not uploaded_df.empty:
+            df = uploaded_df
+        else:
+            df = charger_donnees(db)
+        
         kpis = calculer_kpis_globaux(df)
         risques = calculer_risques_fournisseurs(df)
         actions = obtenir_actions_recommandees(risques)
@@ -171,7 +181,8 @@ async def get_dashboard_data(db: Session = Depends(get_db)):
             "kpis_globaux": kpis,
             "suppliers": risques,
             "actions": actions,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "data_source": "uploaded" if uploaded_df is not None else "database"
         }
     except Exception as e:
         print(f"❌ Erreur dans get_dashboard_data: {e}")
@@ -184,7 +195,11 @@ async def get_predictions(
 ):
     """Prédictions avancées (3 méthodes combinées)"""
     try:
-        df = charger_donnees(db)
+        uploaded_df = get_uploaded_data()
+        if uploaded_df is not None and not uploaded_df.empty:
+            df = uploaded_df
+        else:
+            df = charger_donnees(db)
         predictions = calculer_predictions_avancees(df, fenetre=fenetre)
         return {
             "predictions": predictions,
@@ -204,7 +219,11 @@ async def get_predictions(
 async def compare_prediction_methods(supplier_name: str, db: Session = Depends(get_db)):
     """Compare les 3 méthodes de prédiction pour un fournisseur"""
     try:
-        df = charger_donnees(db)
+        uploaded_df = get_uploaded_data()
+        if uploaded_df is not None and not uploaded_df.empty:
+            df = uploaded_df
+        else:
+            df = charger_donnees(db)
         comparison = comparer_methodes_prediction(df, supplier_name)
         
         if not comparison:
@@ -221,7 +240,11 @@ async def compare_prediction_methods(supplier_name: str, db: Session = Depends(g
 async def get_supplier_detail(supplier_name: str, db: Session = Depends(get_db)):
     """Détail d'un fournisseur spécifique"""
     try:
-        df = charger_donnees(db)
+        uploaded_df = get_uploaded_data()
+        if uploaded_df is not None and not uploaded_df.empty:
+            df = uploaded_df
+        else:
+            df = charger_donnees(db)
         detail = obtenir_detail_fournisseur(df, supplier_name)
         
         if not detail:
@@ -238,7 +261,11 @@ async def get_supplier_detail(supplier_name: str, db: Session = Depends(get_db))
 async def get_actions(db: Session = Depends(get_db)):
     """Liste des actions recommandées groupées par priorité"""
     try:
-        df = charger_donnees(db)
+        uploaded_df = get_uploaded_data()
+        if uploaded_df is not None and not uploaded_df.empty:
+            df = uploaded_df
+        else:
+            df = charger_donnees(db)
         risques = calculer_risques_fournisseurs(df)
         actions = obtenir_actions_recommandees(risques)
         
@@ -260,7 +287,11 @@ async def get_actions(db: Session = Depends(get_db)):
 async def get_distribution(db: Session = Depends(get_db)):
     """Distribution des niveaux de risque"""
     try:
-        df = charger_donnees(db)
+        uploaded_df = get_uploaded_data()
+        if uploaded_df is not None and not uploaded_df.empty:
+            df = uploaded_df
+        else:
+            df = charger_donnees(db)
         risques = calculer_risques_fournisseurs(df)
         distribution = calculer_distribution_risques(risques)
         
@@ -279,7 +310,11 @@ async def get_stats(
 ):
     """Statistiques sur une période donnée"""
     try:
-        df = charger_donnees(db)
+        uploaded_df = get_uploaded_data()
+        if uploaded_df is not None and not uploaded_df.empty:
+            df = uploaded_df
+        else:
+            df = charger_donnees(db)
         stats = calculer_stats_periode(df, jours=periode)
         return stats
     except Exception as e:
@@ -290,7 +325,11 @@ async def get_stats(
 async def get_suppliers_list(db: Session = Depends(get_db)):
     """Liste simple de tous les fournisseurs"""
     try:
-        df = charger_donnees(db)
+        uploaded_df = get_uploaded_data()
+        if uploaded_df is not None and not uploaded_df.empty:
+            df = uploaded_df
+        else:
+            df = charger_donnees(db)
         suppliers = calculer_risques_fournisseurs(df)
         
         suppliers_list = [
