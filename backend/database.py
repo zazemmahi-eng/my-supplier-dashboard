@@ -103,9 +103,14 @@ def init_db():
     """
     Crée toutes les tables définies dans les modèles
     À appeler au démarrage de l'application
+    Includes: Supplier, Order, Account, Workspace, WorkspaceDataset, CustomKPI, ModelSelection
     """
     try:
+        # Import workspace models to ensure they're registered with Base
+        from backend.workspace_models import Workspace, WorkspaceDataset, CustomKPI, ModelSelection
+        
         Base.metadata.create_all(bind=engine)
         print("[OK] Tables de base de données créées/vérifiées")
+        print("[OK] Tables Workspace ajoutées: workspaces, workspace_datasets, custom_kpis, model_selections")
     except Exception as e:
         print(f"[ERROR] Erreur lors de la création des tables : {e}")

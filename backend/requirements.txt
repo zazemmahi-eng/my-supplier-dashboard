@@ -26,6 +26,11 @@ scikit-learn==1.5.2
 # Utilitaires
 typing-extensions==4.12.2
 
+# Reporting & Export - NEW for Workspaces v4.0
+openpyxl==3.1.2
+reportlab==4.2.0
+python-multipart==0.0.9
+
 # ============================================
 # INSTALLATION
 # ============================================
@@ -37,17 +42,25 @@ typing-extensions==4.12.2
 #             SQLAlchemy==2.0.36 psycopg[binary]==3.2.3 \
 #             pydantic==2.9.2 pydantic-settings==2.6.1 \
 #             python-dotenv==1.0.1 python-dateutil==2.9.0.post0 \
-#             typing-extensions==4.12.2 scikit-learn==1.5.2
+#             typing-extensions==4.12.2 scikit-learn==1.5.2 \
+#             openpyxl==3.1.2 reportlab==4.2.0 python-multipart==0.0.9
 #
 # ============================================
-# NOTES v3.0
+# NOTES v4.0 - WORKSPACES
 # ============================================
 # ✅ Toutes vos dépendances conservées (versions actuelles)
 # ✅ Ajout : scikit-learn==1.5.2 (pour prédictions avancées)
+# ✅ Ajout : openpyxl==3.1.2 (export Excel)
+# ✅ Ajout : reportlab==4.2.0 (export PDF)
+# ✅ Ajout : python-multipart==0.0.9 (file uploads)
 #
 # scikit-learn est requis pour :
 # - Régression Linéaire (LinearRegression)
 # - Comparaison méthodes de prédiction
 # - Calculs ML avancés dans mon_analyse.py
+#
+# openpyxl & reportlab pour :
+# - Export rapports Excel multi-feuilles
+# - Export rapports PDF formatés
 #
 # ============================================

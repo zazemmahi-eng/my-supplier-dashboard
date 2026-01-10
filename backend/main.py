@@ -29,6 +29,8 @@ from backend.mon_analyse import (
 from backend.models import Supplier, Order, Account
 from backend.database import get_db, init_db
 from backend.upload_routes import router as upload_router, get_uploaded_data
+from backend.workspace_routes import router as workspace_router
+from backend.reporting_routes import router as reporting_router
 
 # ============================================
 # CONFIGURATION FASTAPI
@@ -57,6 +59,12 @@ app.add_middleware(
 
 # Include upload router
 app.include_router(upload_router)
+
+# Include workspace management router
+app.include_router(workspace_router)
+
+# Include reporting/export router
+app.include_router(reporting_router)
 
 # ============================================
 # MODÈLES PYDANTIC

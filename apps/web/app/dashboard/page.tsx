@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import Link from 'next/link';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
@@ -9,7 +10,7 @@ import {
   TrendingUp, TrendingDown, AlertTriangle, Clock, CheckCircle,
   Package, Activity, Plus, X, Mail, Phone, MapPin, FileText, Star,
   BarChart3, PieChart as PieChartIcon, LineChart as LineChartIcon, Upload, RotateCcw,
-  ChevronRight, Download, FileBarChart, XCircle
+  ChevronRight, Download, FileBarChart, XCircle, FolderOpen
 } from 'lucide-react';
 import DataUploadLanding from '~/components/DataUploadLanding';
 
@@ -277,6 +278,13 @@ export default function SupplierDashboardPage() {
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-4xl font-bold text-gray-900">📊 Dashboard Prédictif</h1>
           <div className="flex items-center gap-3">
+            {/* NEW: Link to Workspaces */}
+            <Link
+              href="/workspaces"
+              className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2.5 font-semibold text-white shadow-lg hover:bg-purple-700 transition-colors"
+            >
+              <FolderOpen className="h-4 w-4" /> Workspaces
+            </Link>
             <button
               onClick={handleResetData}
               className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2.5 font-semibold text-white shadow-lg hover:bg-orange-600 transition-colors"

@@ -1,0 +1,10 @@
+supplier,order_date,expected_days,actual_days,quality_score
+Supplier A,2024-01-01,5,7,95
+Supplier A,2024-01-05,3,4,98
+Supplier A,2024-01-10,4,6,92
+Supplier B,2024-01-02,5,12,88
+Supplier B,2024-01-07,4,5,94
+Supplier B,2024-01-15,6,9,85
+Supplier C,2024-01-03,5,5,100
+Supplier C,2024-01-08,4,5,99
+Supplier C,2024-01-14,6,6,98
