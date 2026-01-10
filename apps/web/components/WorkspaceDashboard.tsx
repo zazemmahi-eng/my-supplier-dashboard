@@ -35,24 +35,31 @@ interface Workspace {
 }
 
 // Data type case descriptions for display
+// Each case generates a specific dashboard with isolated KPIs and charts
 const DATA_TYPE_INFO = {
   delays: {
-    label: 'Case A - Retards',
-    description: 'Format standard avec dates promises et livrées',
-    columns: ['supplier', 'date_promised', 'date_delivered', 'defects'],
-    color: 'bg-blue-100 text-blue-800'
+    label: 'Case A - Retards Uniquement',
+    description: 'Analyse des délais de livraison (dates promises vs livrées)',
+    columns: ['supplier', 'date_promised', 'date_delivered'],
+    color: 'bg-blue-100 text-blue-800',
+    icon: '📅',
+    metrics: ['Taux de retard', 'Retard moyen', 'Ponctualité']
   },
   late_days: {
-    label: 'Case B - Jours de Retard',
-    description: 'Format avec durées prévues et réelles',
-    columns: ['supplier', 'order_date', 'expected_days', 'actual_days', 'quality_score'],
-    color: 'bg-purple-100 text-purple-800'
+    label: 'Case B - Défauts Uniquement',
+    description: 'Analyse du taux de défauts par commande',
+    columns: ['supplier', 'order_date', 'defects'],
+    color: 'bg-purple-100 text-purple-800',
+    icon: '🔍',
+    metrics: ['Taux de défaut', 'Défaut moyen', 'Conformité']
   },
   mixed: {
-    label: 'Case C - Mixte',
-    description: 'Format combiné retards et qualité',
-    columns: ['supplier', 'date_promised', 'date_delivered', 'defects', 'quality_score'],
-    color: 'bg-green-100 text-green-800'
+    label: 'Case C - Mixte (Retards + Défauts)',
+    description: 'Analyse combinée des retards et défauts',
+    columns: ['supplier', 'date_promised', 'date_delivered', 'defects'],
+    color: 'bg-green-100 text-green-800',
+    icon: '📊',
+    metrics: ['Tous les KPIs', 'Alertes combinées', 'Prédictions complètes']
   }
 };
 

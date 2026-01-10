@@ -95,41 +95,50 @@ class ModelSelectionUpdate(BaseModel):
 
 # ============================================
 # DATA VALIDATION SCHEMAS PER CASE
+# Each case has specific columns and generates case-specific dashboards
 # ============================================
 
-# Case A: Delays format (original)
+# Case A: DELAY ONLY
+# For datasets containing ONLY delay data (no defects)
+# Dashboard shows: delay KPIs, delay-based alerts, delay predictions
 CASE_A_SCHEMA = {
+    "required": ["supplier", "date_promised", "date_delivered"],
+    "types": {
+        "supplier": "string",
+        "date_promised": "date",
+        "date_delivered": "date"
+    },
+    "case_type": "delay_only",
+    "description": "Données de retard uniquement (dates promises et livrées)"
+}
+
+# Case B: DEFECTS ONLY
+# For datasets containing ONLY defect data (no delay)
+# Dashboard shows: defects KPIs, defect-based alerts, defect predictions
+CASE_B_SCHEMA = {
+    "required": ["supplier", "order_date", "defects"],
+    "types": {
+        "supplier": "string",
+        "order_date": "date",
+        "defects": "float"
+    },
+    "case_type": "defects_only",
+    "description": "Données de défauts uniquement (taux de défauts par commande)"
+}
+
+# Case C: MIXED (Delay + Defects)
+# For datasets containing BOTH delay AND defects data
+# Dashboard shows: all KPIs, combined alerts, predictions for both metrics
+CASE_C_SCHEMA = {
     "required": ["supplier", "date_promised", "date_delivered", "defects"],
     "types": {
         "supplier": "string",
         "date_promised": "date",
         "date_delivered": "date",
         "defects": "float"
-    }
-}
-
-# Case B: Late Days format
-CASE_B_SCHEMA = {
-    "required": ["supplier", "order_date", "expected_days", "actual_days", "quality_score"],
-    "types": {
-        "supplier": "string",
-        "order_date": "date",
-        "expected_days": "integer",
-        "actual_days": "integer",
-        "quality_score": "float"
-    }
-}
-
-# Case C: Mixed format (combines A and B)
-CASE_C_SCHEMA = {
-    "required": ["supplier", "date_promised", "date_delivered", "defects", "quality_score"],
-    "types": {
-        "supplier": "string",
-        "date_promised": "date",
-        "date_delivered": "date",
-        "defects": "float",
-        "quality_score": "float"
-    }
+    },
+    "case_type": "mixed",
+    "description": "Données mixtes (retards ET défauts)"
 }
 
 
@@ -196,37 +205,53 @@ def process_csv_for_case(df: pd.DataFrame, data_type: DataTypeCase) -> pd.DataFr
     """
     Process and normalize CSV data based on the data type case.
     Transforms data to be compatible with existing ML models WITHOUT modifying them.
+    
+    Case A (Delay Only): Calculates delay from dates, sets defects to 0
+    Case B (Defects Only): Uses defects data, sets delay to 0
+    Case C (Mixed): Uses both delay and defects data
     """
     processed_df = df.copy()
     
     if data_type == DataTypeCase.CASE_A:
-        # Original delays format - minimal processing
+        # ========================================
+        # CASE A: DELAY ONLY
+        # Accepts: supplier, date_promised, date_delivered
+        # Dashboard: delay KPIs, delay alerts, delay predictions
+        # ========================================
         processed_df["date_promised"] = pd.to_datetime(processed_df["date_promised"]).dt.tz_localize(None)
         processed_df["date_delivered"] = pd.to_datetime(processed_df["date_delivered"]).dt.tz_localize(None)
-        processed_df["defects"] = pd.to_numeric(processed_df["defects"], errors='coerce').fillna(0.0)
+        # Calculate delay from dates
         processed_df["delay"] = (processed_df["date_delivered"] - processed_df["date_promised"]).dt.days
         processed_df["delay"] = processed_df["delay"].apply(lambda x: max(x, 0) if pd.notna(x) else 0)
+        # Set defects to 0 for ML model compatibility (not used in Case A dashboard)
+        processed_df["defects"] = 0.0
     
     elif data_type == DataTypeCase.CASE_B:
-        # Late Days format - transform to match original format
+        # ========================================
+        # CASE B: DEFECTS ONLY
+        # Accepts: supplier, order_date, defects
+        # Dashboard: defects KPIs, defect alerts, defect predictions
+        # ========================================
         processed_df["order_date"] = pd.to_datetime(processed_df["order_date"]).dt.tz_localize(None)
-        processed_df["date_promised"] = processed_df["order_date"] + pd.to_timedelta(processed_df["expected_days"], unit='D')
-        processed_df["date_delivered"] = processed_df["order_date"] + pd.to_timedelta(processed_df["actual_days"], unit='D')
-        # Convert quality_score (0-100) to defects (0-1)
-        processed_df["defects"] = (100 - processed_df["quality_score"]) / 100.0
-        processed_df["delay"] = processed_df["actual_days"] - processed_df["expected_days"]
-        processed_df["delay"] = processed_df["delay"].apply(lambda x: max(x, 0) if pd.notna(x) else 0)
+        processed_df["defects"] = pd.to_numeric(processed_df["defects"], errors='coerce').fillna(0.0)
+        # Set delay to 0 for ML model compatibility (not used in Case B dashboard)
+        processed_df["delay"] = 0
+        # Create date columns for compatibility with existing analysis functions
+        processed_df["date_promised"] = processed_df["order_date"]
+        processed_df["date_delivered"] = processed_df["order_date"]
     
     elif data_type == DataTypeCase.CASE_C:
-        # Mixed format - use both delay and quality metrics
+        # ========================================
+        # CASE C: MIXED (Delay + Defects)
+        # Accepts: supplier, date_promised, date_delivered, defects
+        # Dashboard: all KPIs, combined alerts, predictions for both
+        # ========================================
         processed_df["date_promised"] = pd.to_datetime(processed_df["date_promised"]).dt.tz_localize(None)
         processed_df["date_delivered"] = pd.to_datetime(processed_df["date_delivered"]).dt.tz_localize(None)
         processed_df["defects"] = pd.to_numeric(processed_df["defects"], errors='coerce').fillna(0.0)
-        processed_df["quality_score"] = pd.to_numeric(processed_df["quality_score"], errors='coerce').fillna(100.0)
+        # Calculate delay from dates
         processed_df["delay"] = (processed_df["date_delivered"] - processed_df["date_promised"]).dt.days
         processed_df["delay"] = processed_df["delay"].apply(lambda x: max(x, 0) if pd.notna(x) else 0)
-        # Combine defects and quality_score for enhanced analysis
-        processed_df["combined_quality"] = (processed_df["defects"] + (100 - processed_df["quality_score"]) / 100) / 2
     
     # Clean supplier names
     processed_df["supplier"] = processed_df["supplier"].astype(str).str.strip()
@@ -623,10 +648,12 @@ async def get_schema_info(
     schema = get_schema_for_case(workspace.data_type)
     
     # Generate sample CSV content
+    # Sample CSV templates for each data type case
+    # Case A: delay only, Case B: defects only, Case C: mixed
     samples = {
-        DataTypeCase.CASE_A: "supplier,date_promised,date_delivered,defects\nSupplier A,2024-01-01,2024-01-03,0.02\nSupplier B,2024-01-05,2024-01-06,0.01",
-        DataTypeCase.CASE_B: "supplier,order_date,expected_days,actual_days,quality_score\nSupplier A,2024-01-01,5,7,95\nSupplier B,2024-01-05,3,3,98",
-        DataTypeCase.CASE_C: "supplier,date_promised,date_delivered,defects,quality_score\nSupplier A,2024-01-01,2024-01-03,0.02,95\nSupplier B,2024-01-05,2024-01-06,0.01,98"
+        DataTypeCase.CASE_A: "supplier,date_promised,date_delivered\nSupplier A,2024-01-01,2024-01-03\nSupplier B,2024-01-05,2024-01-10",
+        DataTypeCase.CASE_B: "supplier,order_date,defects\nSupplier A,2024-01-01,0.02\nSupplier B,2024-01-05,0.08",
+        DataTypeCase.CASE_C: "supplier,date_promised,date_delivered,defects\nSupplier A,2024-01-01,2024-01-03,0.02\nSupplier B,2024-01-05,2024-01-10,0.08"
     }
     
     return {
@@ -876,7 +903,344 @@ async def delete_custom_kpi(
 
 # ============================================
 # ANALYSIS ENDPOINTS (Using Existing Models)
+# Case-specific dashboards: A=delay, B=defects, C=mixed
 # ============================================
+
+def calculate_case_specific_kpis(df: pd.DataFrame, data_type: DataTypeCase) -> Dict[str, Any]:
+    """
+    Calculate KPIs specific to the data type case.
+    
+    Case A (Delay Only): Only delay-related KPIs
+    Case B (Defects Only): Only defects-related KPIs
+    Case C (Mixed): All KPIs
+    """
+    kpis = {}
+    
+    if data_type == DataTypeCase.CASE_A:
+        # ========================================
+        # CASE A: DELAY ONLY KPIs
+        # ========================================
+        total_orders = len(df)
+        delayed_orders = len(df[df['delay'] > 0])
+        
+        kpis['taux_retard'] = round((delayed_orders / total_orders * 100) if total_orders > 0 else 0, 2)
+        kpis['retard_moyen'] = round(df['delay'].mean(), 1) if len(df) > 0 else 0
+        kpis['retard_max'] = int(df['delay'].max()) if len(df) > 0 else 0
+        kpis['nb_commandes'] = total_orders
+        kpis['nb_retards'] = delayed_orders
+        kpis['commandes_a_temps'] = total_orders - delayed_orders
+        kpis['taux_ponctualite'] = round(100 - kpis['taux_retard'], 2)
+        
+    elif data_type == DataTypeCase.CASE_B:
+        # ========================================
+        # CASE B: DEFECTS ONLY KPIs
+        # ========================================
+        total_orders = len(df)
+        defective_orders = len(df[df['defects'] > 0])
+        
+        kpis['taux_defaut'] = round((defective_orders / total_orders * 100) if total_orders > 0 else 0, 2)
+        kpis['defaut_moyen'] = round(df['defects'].mean() * 100, 2) if len(df) > 0 else 0
+        kpis['defaut_max'] = round(df['defects'].max() * 100, 2) if len(df) > 0 else 0
+        kpis['nb_commandes'] = total_orders
+        kpis['nb_defectueux'] = defective_orders
+        kpis['commandes_conformes'] = total_orders - defective_orders
+        kpis['taux_conformite'] = round(100 - kpis['taux_defaut'], 2)
+        
+    elif data_type == DataTypeCase.CASE_C:
+        # ========================================
+        # CASE C: MIXED KPIs (Both delay and defects)
+        # ========================================
+        total_orders = len(df)
+        delayed_orders = len(df[df['delay'] > 0])
+        defective_orders = len(df[df['defects'] > 0])
+        perfect_orders = len(df[(df['delay'] == 0) & (df['defects'] == 0)])
+        
+        # Delay KPIs
+        kpis['taux_retard'] = round((delayed_orders / total_orders * 100) if total_orders > 0 else 0, 2)
+        kpis['retard_moyen'] = round(df['delay'].mean(), 1) if len(df) > 0 else 0
+        
+        # Defects KPIs
+        kpis['taux_defaut'] = round((defective_orders / total_orders * 100) if total_orders > 0 else 0, 2)
+        kpis['defaut_moyen'] = round(df['defects'].mean() * 100, 2) if len(df) > 0 else 0
+        
+        # Combined KPIs
+        kpis['nb_commandes'] = total_orders
+        kpis['commandes_parfaites'] = perfect_orders
+        kpis['taux_conformite'] = round((perfect_orders / total_orders * 100) if total_orders > 0 else 0, 2)
+    
+    return kpis
+
+
+def calculate_case_specific_supplier_risks(df: pd.DataFrame, data_type: DataTypeCase) -> List[Dict[str, Any]]:
+    """
+    Calculate supplier risks specific to the data type case.
+    
+    Case A: Risk based on delay only
+    Case B: Risk based on defects only
+    Case C: Risk based on both metrics
+    """
+    risques = []
+    
+    for supplier in df['supplier'].unique():
+        supplier_df = df[df['supplier'] == supplier]
+        n_orders = len(supplier_df)
+        
+        supplier_data = {
+            'supplier': supplier,
+            'nb_commandes': n_orders,
+        }
+        
+        if data_type == DataTypeCase.CASE_A:
+            # ========================================
+            # CASE A: DELAY-BASED RISK
+            # ========================================
+            retard_moyen = supplier_df['delay'].mean()
+            taux_retard = (supplier_df['delay'] > 0).mean() * 100
+            
+            # Risk score based on delay only (0-100)
+            score_risque = min(100, int(retard_moyen * 5 + taux_retard * 0.5))
+            
+            supplier_data.update({
+                'retard_moyen': round(retard_moyen, 1),
+                'taux_retard': round(taux_retard, 1),
+                'score_risque': score_risque,
+                'niveau_risque': 'Élevé' if score_risque > 55 else 'Modéré' if score_risque > 25 else 'Faible',
+                'status': 'eleve' if score_risque > 55 else 'modere' if score_risque > 25 else 'faible',
+                'tendance_retards': 'hausse' if len(supplier_df) >= 3 and supplier_df['delay'].iloc[-1] > supplier_df['delay'].mean() else 'baisse'
+            })
+            
+        elif data_type == DataTypeCase.CASE_B:
+            # ========================================
+            # CASE B: DEFECTS-BASED RISK
+            # ========================================
+            defaut_moyen = supplier_df['defects'].mean() * 100
+            taux_defaut = (supplier_df['defects'] > 0).mean() * 100
+            
+            # Risk score based on defects only (0-100)
+            score_risque = min(100, int(defaut_moyen * 2 + taux_defaut * 0.5))
+            
+            supplier_data.update({
+                'taux_defaut': round(taux_defaut, 1),
+                'defaut_moyen': round(defaut_moyen, 2),
+                'score_risque': score_risque,
+                'niveau_risque': 'Élevé' if score_risque > 55 else 'Modéré' if score_risque > 25 else 'Faible',
+                'status': 'eleve' if score_risque > 55 else 'modere' if score_risque > 25 else 'faible',
+                'tendance_defauts': 'hausse' if len(supplier_df) >= 3 and supplier_df['defects'].iloc[-1] > supplier_df['defects'].mean() else 'baisse'
+            })
+            
+        elif data_type == DataTypeCase.CASE_C:
+            # ========================================
+            # CASE C: COMBINED RISK (delay + defects)
+            # ========================================
+            retard_moyen = supplier_df['delay'].mean()
+            taux_retard = (supplier_df['delay'] > 0).mean() * 100
+            defaut_moyen = supplier_df['defects'].mean() * 100
+            taux_defaut = (supplier_df['defects'] > 0).mean() * 100
+            
+            # Combined risk score (0-100)
+            score_risque = min(100, int(
+                retard_moyen * 3 + 
+                taux_retard * 0.3 + 
+                defaut_moyen * 1.5 + 
+                taux_defaut * 0.3
+            ))
+            
+            supplier_data.update({
+                'retard_moyen': round(retard_moyen, 1),
+                'taux_retard': round(taux_retard, 1),
+                'taux_defaut': round(taux_defaut, 1),
+                'defaut_moyen': round(defaut_moyen, 2),
+                'score_risque': score_risque,
+                'niveau_risque': 'Élevé' if score_risque > 55 else 'Modéré' if score_risque > 25 else 'Faible',
+                'status': 'eleve' if score_risque > 55 else 'modere' if score_risque > 25 else 'faible',
+                'tendance_retards': 'hausse' if len(supplier_df) >= 3 and supplier_df['delay'].iloc[-1] > supplier_df['delay'].mean() else 'baisse',
+                'tendance_defauts': 'hausse' if len(supplier_df) >= 3 and supplier_df['defects'].iloc[-1] > supplier_df['defects'].mean() else 'baisse'
+            })
+        
+        risques.append(supplier_data)
+    
+    # Sort by risk score descending
+    risques.sort(key=lambda x: x['score_risque'], reverse=True)
+    return risques
+
+
+def calculate_case_specific_actions(risques: List[Dict], data_type: DataTypeCase) -> List[Dict[str, Any]]:
+    """
+    Generate recommended actions specific to the data type case.
+    
+    Case A: Actions focused on delay reduction
+    Case B: Actions focused on defect reduction
+    Case C: Actions for both metrics
+    """
+    actions = []
+    
+    for r in risques:
+        supplier = r['supplier']
+        niveau = r['niveau_risque']
+        
+        if data_type == DataTypeCase.CASE_A:
+            # ========================================
+            # CASE A: DELAY-FOCUSED ACTIONS
+            # ========================================
+            if niveau == 'Élevé':
+                actions.append({
+                    'supplier': supplier,
+                    'action': 'Renégocier les délais de livraison',
+                    'priority': 'high',
+                    'raison': f"Retard moyen de {r.get('retard_moyen', 0)} jours",
+                    'delai': 'Immédiat',
+                    'impact': 'Réduction des retards de 30-50%'
+                })
+            elif niveau == 'Modéré':
+                actions.append({
+                    'supplier': supplier,
+                    'action': 'Mettre en place un suivi hebdomadaire des livraisons',
+                    'priority': 'medium',
+                    'raison': f"Taux de retard de {r.get('taux_retard', 0)}%",
+                    'delai': '2 semaines',
+                    'impact': 'Amélioration de la ponctualité'
+                })
+                
+        elif data_type == DataTypeCase.CASE_B:
+            # ========================================
+            # CASE B: DEFECT-FOCUSED ACTIONS
+            # ========================================
+            if niveau == 'Élevé':
+                actions.append({
+                    'supplier': supplier,
+                    'action': 'Audit qualité approfondi',
+                    'priority': 'high',
+                    'raison': f"Taux de défaut de {r.get('taux_defaut', 0)}%",
+                    'delai': 'Immédiat',
+                    'impact': 'Réduction des défauts de 40-60%'
+                })
+            elif niveau == 'Modéré':
+                actions.append({
+                    'supplier': supplier,
+                    'action': 'Renforcer les contrôles qualité à réception',
+                    'priority': 'medium',
+                    'raison': f"Défaut moyen de {r.get('defaut_moyen', 0)}%",
+                    'delai': '1 mois',
+                    'impact': 'Amélioration de la conformité'
+                })
+                
+        elif data_type == DataTypeCase.CASE_C:
+            # ========================================
+            # CASE C: COMBINED ACTIONS
+            # ========================================
+            if niveau == 'Élevé':
+                # Check which metric is worse
+                has_delay_issue = r.get('taux_retard', 0) > 30
+                has_defect_issue = r.get('taux_defaut', 0) > 30
+                
+                if has_delay_issue and has_defect_issue:
+                    actions.append({
+                        'supplier': supplier,
+                        'action': 'Plan d\'amélioration complet (délais + qualité)',
+                        'priority': 'high',
+                        'raison': f"Retard: {r.get('retard_moyen', 0)}j, Défaut: {r.get('taux_defaut', 0)}%",
+                        'delai': 'Immédiat',
+                        'impact': 'Amélioration globale de 40%'
+                    })
+                elif has_delay_issue:
+                    actions.append({
+                        'supplier': supplier,
+                        'action': 'Renégocier les délais de livraison',
+                        'priority': 'high',
+                        'raison': f"Retard moyen de {r.get('retard_moyen', 0)} jours",
+                        'delai': 'Immédiat',
+                        'impact': 'Réduction des retards de 30-50%'
+                    })
+                else:
+                    actions.append({
+                        'supplier': supplier,
+                        'action': 'Audit qualité approfondi',
+                        'priority': 'high',
+                        'raison': f"Taux de défaut de {r.get('taux_defaut', 0)}%",
+                        'delai': 'Immédiat',
+                        'impact': 'Réduction des défauts de 40-60%'
+                    })
+            elif niveau == 'Modéré':
+                actions.append({
+                    'supplier': supplier,
+                    'action': 'Suivi mensuel des performances',
+                    'priority': 'medium',
+                    'raison': f"Score de risque: {r.get('score_risque', 0)}",
+                    'delai': '1 mois',
+                    'impact': 'Maintien de la qualité de service'
+                })
+    
+    return actions
+
+
+def calculate_case_specific_predictions(df: pd.DataFrame, data_type: DataTypeCase, fenetre: int = 3) -> List[Dict[str, Any]]:
+    """
+    Calculate predictions specific to the data type case.
+    Uses existing ML model functions but filters output based on case.
+    
+    Case A: Only delay predictions
+    Case B: Only defect predictions
+    Case C: Both predictions
+    """
+    predictions = []
+    
+    for supplier in df['supplier'].unique():
+        supplier_df = df[df['supplier'] == supplier]
+        n_orders = len(supplier_df)
+        
+        pred = {
+            'supplier': supplier,
+            'nb_commandes_historique': n_orders,
+            'confiance': 'haute' if n_orders >= 10 else 'moyenne' if n_orders >= 5 else 'basse'
+        }
+        
+        if data_type == DataTypeCase.CASE_A:
+            # ========================================
+            # CASE A: DELAY PREDICTIONS ONLY
+            # ========================================
+            delays = supplier_df['delay'].values
+            # Simple moving average prediction
+            if len(delays) >= fenetre:
+                pred['predicted_delay'] = round(float(delays[-fenetre:].mean()), 1)
+            else:
+                pred['predicted_delay'] = round(float(delays.mean()), 1)
+            pred['predicted_defect'] = None  # Not applicable for Case A
+            
+        elif data_type == DataTypeCase.CASE_B:
+            # ========================================
+            # CASE B: DEFECT PREDICTIONS ONLY
+            # ========================================
+            defects = supplier_df['defects'].values
+            # Simple moving average prediction
+            if len(defects) >= fenetre:
+                pred['predicted_defect'] = round(float(defects[-fenetre:].mean()) * 100, 2)
+            else:
+                pred['predicted_defect'] = round(float(defects.mean()) * 100, 2)
+            pred['predicted_delay'] = None  # Not applicable for Case B
+            
+        elif data_type == DataTypeCase.CASE_C:
+            # ========================================
+            # CASE C: BOTH PREDICTIONS
+            # ========================================
+            delays = supplier_df['delay'].values
+            defects = supplier_df['defects'].values
+            
+            # Delay prediction
+            if len(delays) >= fenetre:
+                pred['predicted_delay'] = round(float(delays[-fenetre:].mean()), 1)
+            else:
+                pred['predicted_delay'] = round(float(delays.mean()), 1)
+            
+            # Defect prediction
+            if len(defects) >= fenetre:
+                pred['predicted_defect'] = round(float(defects[-fenetre:].mean()) * 100, 2)
+            else:
+                pred['predicted_defect'] = round(float(defects.mean()) * 100, 2)
+        
+        predictions.append(pred)
+    
+    return predictions
+
 
 @router.get("/{workspace_id}/analysis/dashboard")
 async def get_workspace_dashboard(
@@ -885,6 +1249,12 @@ async def get_workspace_dashboard(
 ):
     """
     Get complete dashboard data for a workspace.
+    Returns CASE-SPECIFIC KPIs, alerts, and predictions based on workspace data_type.
+    
+    Case A (delay_only): Delay KPIs, delay alerts, delay predictions
+    Case B (defects_only): Defect KPIs, defect alerts, defect predictions  
+    Case C (mixed): All KPIs, combined alerts, all predictions
+    
     Uses EXISTING ML models without modification.
     """
     workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
@@ -895,7 +1265,7 @@ async def get_workspace_dashboard(
     if df is None or df.empty:
         raise HTTPException(status_code=400, detail="Aucune donnée disponible. Veuillez uploader un dataset.")
     
-    # Validate required columns exist
+    # Validate required columns exist (delay and defects are always present after processing)
     required_cols = ['supplier', 'delay', 'defects']
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
@@ -914,12 +1284,29 @@ async def get_workspace_dashboard(
         if model_sel and model_sel.parameters:
             fenetre = model_sel.parameters.get("fenetre", 3)
         
-        # Use EXISTING model functions without modification
-        kpis = calculer_kpis_globaux(df)
-        risques = calculer_risques_fournisseurs(df)
-        actions = obtenir_actions_recommandees(risques)
-        predictions = calculer_predictions_avancees(df, fenetre=fenetre)
-        distribution = calculer_distribution_risques(risques)
+        # ========================================
+        # CASE-SPECIFIC CALCULATIONS
+        # Each case gets its own KPIs, risks, actions, and predictions
+        # ========================================
+        
+        # Calculate case-specific KPIs
+        kpis = calculate_case_specific_kpis(df, workspace.data_type)
+        
+        # Calculate case-specific supplier risks
+        risques = calculate_case_specific_supplier_risks(df, workspace.data_type)
+        
+        # Calculate case-specific recommended actions
+        actions = calculate_case_specific_actions(risques, workspace.data_type)
+        
+        # Calculate case-specific predictions
+        predictions = calculate_case_specific_predictions(df, workspace.data_type, fenetre)
+        
+        # Calculate risk distribution
+        distribution = {
+            'faible': {'count': len([r for r in risques if r['niveau_risque'] == 'Faible']), 'label': 'Faible'},
+            'modere': {'count': len([r for r in risques if r['niveau_risque'] == 'Modéré']), 'label': 'Modéré'},
+            'eleve': {'count': len([r for r in risques if r['niveau_risque'] == 'Élevé']), 'label': 'Élevé'}
+        }
         
         # Calculate custom KPIs
         custom_kpis = db.query(CustomKPI).filter(
@@ -941,10 +1328,15 @@ async def get_workspace_dashboard(
                 
                 custom_kpi_values[kpi.name] = round(value, kpi.decimal_places)
         
+        # Get case type description for frontend
+        schema = get_schema_for_case(workspace.data_type)
+        
         return {
             "workspace_id": str(workspace_id),
             "workspace_name": workspace.name,
             "data_type": workspace.data_type.value,
+            "case_type": schema.get("case_type", "unknown"),
+            "case_description": schema.get("description", ""),
             "kpis_globaux": kpis,
             "custom_kpis": custom_kpi_values,
             "suppliers": risques,

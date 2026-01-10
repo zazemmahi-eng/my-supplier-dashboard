@@ -63,8 +63,8 @@ interface DashboardData {
   suppliers: Array<Record<string, any>>;
   predictions: Array<{
     supplier: string;
-    predicted_defect: number;
-    predicted_delay: number;
+    predicted_defect: number | null;  // null for Case A (delay only)
+    predicted_delay: number | null;   // null for Case B (defects only)
     // Individual model predictions for comparison
     method_ma_defect?: number;
     method_ma_delay?: number;
@@ -87,6 +87,10 @@ interface DashboardData {
   }>;
   distribution: Record<string, any>;
   selected_model: string;
+  // Case-specific metadata
+  data_type: string;           // "delays" | "late_days" | "mixed"
+  case_type: string;           // "delay_only" | "defects_only" | "mixed"
+  case_description: string;    // Human-readable description of the case
 }
 
 interface Model {
@@ -454,8 +458,15 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
     fill: COLORS[s.status as keyof typeof COLORS] || '#6b7280'
   })) || [];
 
+  // ============================================
+  // CASE-SPECIFIC PREDICTION DATA PREPARATION
+  // Case A: Only delay predictions (defects = null)
+  // Case B: Only defect predictions (delay = null)
+  // Case C: Both predictions
+  // ============================================
   const predictionData = dashboardData?.predictions?.map(p => ({
     name: p.supplier?.substring(0, 10),
+    // Only include non-null values based on case type
     defauts: p.predicted_defect,
     retards: p.predicted_delay
   })) || [];
@@ -465,7 +476,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
   const multiModelPredictionData = dashboardData?.predictions?.map(p => ({
     name: p.supplier?.substring(0, 10),
     supplier: p.supplier,
-    // Combined (average of all 3)
+    // Combined (average of all 3) - only include non-null values
     defauts_combined: p.predicted_defect,
     retards_combined: p.predicted_delay,
     // Moving Average predictions
@@ -480,6 +491,11 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
     confiance: p.confiance,
     nb_commandes: p.nb_commandes_historique
   })) || [];
+
+  // Helper to check if current case shows delays
+  const showDelays = dashboardData?.case_type !== 'defects_only';
+  // Helper to check if current case shows defects
+  const showDefects = dashboardData?.case_type !== 'delay_only';
 
   // ============================================
   // LOADING STATE
@@ -867,19 +883,125 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
         {/* Tab Content */}
         {activeTab === 'overview' && dashboardActivated && dashboardData && (
           <div className="space-y-6">
-            {/* KPIs Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {[
-                { label: 'Taux Retard', value: `${dashboardData.kpis_globaux?.taux_retard || 0}%`, color: 'text-red-600' },
-                { label: 'Taux Défaut', value: `${dashboardData.kpis_globaux?.taux_defaut || 0}%`, color: 'text-orange-600' },
-                { label: 'Retard Moyen', value: `${dashboardData.kpis_globaux?.retard_moyen || 0}j`, color: 'text-blue-600' },
-                { label: 'Conformité', value: `${dashboardData.kpis_globaux?.taux_conformite || 0}%`, color: 'text-green-600' }
-              ].map((kpi, i) => (
-                <div key={i} className="bg-white rounded-xl p-6 shadow">
-                  <p className="text-sm text-gray-500 mb-1">{kpi.label}</p>
-                  <p className={`text-3xl font-bold ${kpi.color}`}>{kpi.value}</p>
+            {/* ============================================
+                CASE INDICATOR BANNER
+                Shows which case is active and what metrics are displayed
+            ============================================ */}
+            <div className={`rounded-xl p-4 ${
+              dashboardData.case_type === 'delay_only' ? 'bg-blue-50 border border-blue-200' :
+              dashboardData.case_type === 'defects_only' ? 'bg-purple-50 border border-purple-200' :
+              'bg-green-50 border border-green-200'
+            }`}>
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">
+                  {dashboardData.case_type === 'delay_only' ? '📅' :
+                   dashboardData.case_type === 'defects_only' ? '🔍' : '📊'}
+                </span>
+                <div>
+                  <h3 className={`font-semibold ${
+                    dashboardData.case_type === 'delay_only' ? 'text-blue-800' :
+                    dashboardData.case_type === 'defects_only' ? 'text-purple-800' :
+                    'text-green-800'
+                  }`}>
+                    {dashboardData.case_type === 'delay_only' ? 'Case A - Retards Uniquement' :
+                     dashboardData.case_type === 'defects_only' ? 'Case B - Défauts Uniquement' :
+                     'Case C - Mixte (Retards + Défauts)'}
+                  </h3>
+                  <p className="text-sm text-gray-600">{dashboardData.case_description}</p>
                 </div>
-              ))}
+              </div>
+            </div>
+
+            {/* ============================================
+                CASE-SPECIFIC KPIs GRID
+                Case A: Only delay KPIs
+                Case B: Only defect KPIs  
+                Case C: All KPIs (delay + defects)
+            ============================================ */}
+            <div className={`grid gap-4 ${
+              dashboardData.case_type === 'mixed' ? 'grid-cols-2 md:grid-cols-4' : 'grid-cols-2 md:grid-cols-3'
+            }`}>
+              {/* CASE A: Delay-only KPIs */}
+              {dashboardData.case_type === 'delay_only' && (
+                <>
+                  <div className="bg-white rounded-xl p-6 shadow border-l-4 border-l-red-500">
+                    <p className="text-sm text-gray-500 mb-1">Taux de Retard</p>
+                    <p className="text-3xl font-bold text-red-600">{dashboardData.kpis_globaux?.taux_retard || 0}%</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow border-l-4 border-l-blue-500">
+                    <p className="text-sm text-gray-500 mb-1">Retard Moyen</p>
+                    <p className="text-3xl font-bold text-blue-600">{dashboardData.kpis_globaux?.retard_moyen || 0}j</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow border-l-4 border-l-green-500">
+                    <p className="text-sm text-gray-500 mb-1">Taux de Ponctualité</p>
+                    <p className="text-3xl font-bold text-green-600">{dashboardData.kpis_globaux?.taux_ponctualite || 0}%</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow">
+                    <p className="text-sm text-gray-500 mb-1">Commandes à Temps</p>
+                    <p className="text-3xl font-bold text-gray-800">{dashboardData.kpis_globaux?.commandes_a_temps || 0}</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow">
+                    <p className="text-sm text-gray-500 mb-1">Commandes en Retard</p>
+                    <p className="text-3xl font-bold text-red-500">{dashboardData.kpis_globaux?.nb_retards || 0}</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow">
+                    <p className="text-sm text-gray-500 mb-1">Total Commandes</p>
+                    <p className="text-3xl font-bold text-gray-600">{dashboardData.kpis_globaux?.nb_commandes || 0}</p>
+                  </div>
+                </>
+              )}
+
+              {/* CASE B: Defects-only KPIs */}
+              {dashboardData.case_type === 'defects_only' && (
+                <>
+                  <div className="bg-white rounded-xl p-6 shadow border-l-4 border-l-orange-500">
+                    <p className="text-sm text-gray-500 mb-1">Taux de Défaut</p>
+                    <p className="text-3xl font-bold text-orange-600">{dashboardData.kpis_globaux?.taux_defaut || 0}%</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow border-l-4 border-l-purple-500">
+                    <p className="text-sm text-gray-500 mb-1">Défaut Moyen</p>
+                    <p className="text-3xl font-bold text-purple-600">{dashboardData.kpis_globaux?.defaut_moyen || 0}%</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow border-l-4 border-l-green-500">
+                    <p className="text-sm text-gray-500 mb-1">Taux de Conformité</p>
+                    <p className="text-3xl font-bold text-green-600">{dashboardData.kpis_globaux?.taux_conformite || 0}%</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow">
+                    <p className="text-sm text-gray-500 mb-1">Commandes Conformes</p>
+                    <p className="text-3xl font-bold text-gray-800">{dashboardData.kpis_globaux?.commandes_conformes || 0}</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow">
+                    <p className="text-sm text-gray-500 mb-1">Commandes Défectueuses</p>
+                    <p className="text-3xl font-bold text-orange-500">{dashboardData.kpis_globaux?.nb_defectueux || 0}</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow">
+                    <p className="text-sm text-gray-500 mb-1">Total Commandes</p>
+                    <p className="text-3xl font-bold text-gray-600">{dashboardData.kpis_globaux?.nb_commandes || 0}</p>
+                  </div>
+                </>
+              )}
+
+              {/* CASE C: Mixed KPIs (both delay and defects) */}
+              {dashboardData.case_type === 'mixed' && (
+                <>
+                  <div className="bg-white rounded-xl p-6 shadow border-l-4 border-l-red-500">
+                    <p className="text-sm text-gray-500 mb-1">Taux de Retard</p>
+                    <p className="text-3xl font-bold text-red-600">{dashboardData.kpis_globaux?.taux_retard || 0}%</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow border-l-4 border-l-orange-500">
+                    <p className="text-sm text-gray-500 mb-1">Taux de Défaut</p>
+                    <p className="text-3xl font-bold text-orange-600">{dashboardData.kpis_globaux?.taux_defaut || 0}%</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow border-l-4 border-l-blue-500">
+                    <p className="text-sm text-gray-500 mb-1">Retard Moyen</p>
+                    <p className="text-3xl font-bold text-blue-600">{dashboardData.kpis_globaux?.retard_moyen || 0}j</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-6 shadow border-l-4 border-l-green-500">
+                    <p className="text-sm text-gray-500 mb-1">Commandes Parfaites</p>
+                    <p className="text-3xl font-bold text-green-600">{dashboardData.kpis_globaux?.commandes_parfaites || 0}</p>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Custom KPIs */}
@@ -942,10 +1064,21 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
               </div>
             </div>
 
-            {/* Suppliers Table */}
+            {/* ============================================
+                CASE-SPECIFIC SUPPLIERS TABLE
+                Case A: Shows delay metrics only
+                Case B: Shows defects metrics only
+                Case C: Shows all metrics
+            ============================================ */}
             <div className="bg-white rounded-xl shadow overflow-hidden">
               <div className="p-6 border-b">
-                <h3 className="font-semibold text-gray-900">Analyse des Fournisseurs</h3>
+                <h3 className="font-semibold text-gray-900">
+                  Analyse des Fournisseurs
+                  <span className="ml-2 text-sm font-normal text-gray-500">
+                    ({dashboardData.case_type === 'delay_only' ? 'Retards' :
+                      dashboardData.case_type === 'defects_only' ? 'Défauts' : 'Mixte'})
+                  </span>
+                </h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full">
@@ -954,9 +1087,30 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fournisseur</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Score</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Niveau</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Retard Moy.</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Défauts</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tendance</th>
+                      {/* Case A: Delay columns only */}
+                      {dashboardData.case_type === 'delay_only' && (
+                        <>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Retard Moy.</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Taux Retard</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tendance</th>
+                        </>
+                      )}
+                      {/* Case B: Defects columns only */}
+                      {dashboardData.case_type === 'defects_only' && (
+                        <>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Défaut Moy.</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Taux Défaut</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tendance</th>
+                        </>
+                      )}
+                      {/* Case C: All columns */}
+                      {dashboardData.case_type === 'mixed' && (
+                        <>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Retard Moy.</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Défauts</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tendance</th>
+                        </>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
@@ -979,17 +1133,54 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                             {s.niveau_risque}
                           </span>
                         </td>
-                        <td className="px-6 py-4">{s.retard_moyen}j</td>
-                        <td className="px-6 py-4">{s.taux_defaut}%</td>
-                        <td className="px-6 py-4">
-                          {s.tendance_defauts === 'hausse' ? (
-                            <TrendingUp className="h-4 w-4 text-red-500" />
-                          ) : s.tendance_defauts === 'baisse' ? (
-                            <TrendingDown className="h-4 w-4 text-green-500" />
-                          ) : (
-                            <span className="text-gray-400">→</span>
-                          )}
-                        </td>
+                        {/* Case A: Delay data */}
+                        {dashboardData.case_type === 'delay_only' && (
+                          <>
+                            <td className="px-6 py-4">{s.retard_moyen}j</td>
+                            <td className="px-6 py-4">{s.taux_retard}%</td>
+                            <td className="px-6 py-4">
+                              {s.tendance_retards === 'hausse' ? (
+                                <TrendingUp className="h-4 w-4 text-red-500" />
+                              ) : s.tendance_retards === 'baisse' ? (
+                                <TrendingDown className="h-4 w-4 text-green-500" />
+                              ) : (
+                                <span className="text-gray-400">→</span>
+                              )}
+                            </td>
+                          </>
+                        )}
+                        {/* Case B: Defects data */}
+                        {dashboardData.case_type === 'defects_only' && (
+                          <>
+                            <td className="px-6 py-4">{s.defaut_moyen}%</td>
+                            <td className="px-6 py-4">{s.taux_defaut}%</td>
+                            <td className="px-6 py-4">
+                              {s.tendance_defauts === 'hausse' ? (
+                                <TrendingUp className="h-4 w-4 text-red-500" />
+                              ) : s.tendance_defauts === 'baisse' ? (
+                                <TrendingDown className="h-4 w-4 text-green-500" />
+                              ) : (
+                                <span className="text-gray-400">→</span>
+                              )}
+                            </td>
+                          </>
+                        )}
+                        {/* Case C: All data */}
+                        {dashboardData.case_type === 'mixed' && (
+                          <>
+                            <td className="px-6 py-4">{s.retard_moyen}j</td>
+                            <td className="px-6 py-4">{s.taux_defaut}%</td>
+                            <td className="px-6 py-4">
+                              {(s.tendance_defauts === 'hausse' || s.tendance_retards === 'hausse') ? (
+                                <TrendingUp className="h-4 w-4 text-red-500" />
+                              ) : (s.tendance_defauts === 'baisse' && s.tendance_retards === 'baisse') ? (
+                                <TrendingDown className="h-4 w-4 text-green-500" />
+                              ) : (
+                                <span className="text-gray-400">→</span>
+                              )}
+                            </td>
+                          </>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -1196,6 +1387,42 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
         {/* Predictions Tab */}
         {activeTab === 'predictions' && dashboardActivated && dashboardData && (
           <div className="space-y-6">
+            {/* ============================================
+                CASE INDICATOR FOR PREDICTIONS
+                Shows which metrics are being predicted based on case type
+            ============================================ */}
+            <div className={`rounded-xl p-4 ${
+              dashboardData.case_type === 'delay_only' ? 'bg-blue-50 border border-blue-200' :
+              dashboardData.case_type === 'defects_only' ? 'bg-purple-50 border border-purple-200' :
+              'bg-green-50 border border-green-200'
+            }`}>
+              <div className="flex items-center gap-3">
+                <TrendingUp className={`h-6 w-6 ${
+                  dashboardData.case_type === 'delay_only' ? 'text-blue-600' :
+                  dashboardData.case_type === 'defects_only' ? 'text-purple-600' :
+                  'text-green-600'
+                }`} />
+                <div>
+                  <h3 className={`font-semibold ${
+                    dashboardData.case_type === 'delay_only' ? 'text-blue-800' :
+                    dashboardData.case_type === 'defects_only' ? 'text-purple-800' :
+                    'text-green-800'
+                  }`}>
+                    Prédictions: {dashboardData.case_type === 'delay_only' ? 'Retards uniquement' :
+                                  dashboardData.case_type === 'defects_only' ? 'Défauts uniquement' :
+                                  'Retards et Défauts'}
+                  </h3>
+                  <p className="text-sm text-gray-600">
+                    {dashboardData.case_type === 'delay_only' 
+                      ? 'Les prédictions de défauts ne sont pas disponibles pour ce type de données.'
+                      : dashboardData.case_type === 'defects_only'
+                        ? 'Les prédictions de retards ne sont pas disponibles pour ce type de données.'
+                        : 'Prédictions complètes pour les deux métriques.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
             {/* Mode Toggle - Switch between single model and multi-model comparison */}
             <div className="bg-white rounded-xl p-4 shadow">
               <div className="flex items-center justify-between">
@@ -1262,10 +1489,19 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
               )}
             </div>
 
-            {/* Single Model Chart - shown when NOT in multi-model mode */}
+            {/* ============================================
+                CASE-SPECIFIC SINGLE MODEL CHART
+                Only shows relevant metrics based on case type
+            ============================================ */}
             {!multiModelMode && (
               <div className="bg-white rounded-xl p-6 shadow">
-                <h3 className="font-semibold text-gray-900 mb-4">Prédictions par Modèle: {selectedModel}</h3>
+                <h3 className="font-semibold text-gray-900 mb-4">
+                  Prédictions par Modèle: {selectedModel}
+                  <span className="ml-2 text-sm font-normal text-gray-500">
+                    ({dashboardData.case_type === 'delay_only' ? 'Retards' :
+                      dashboardData.case_type === 'defects_only' ? 'Défauts' : 'Mixte'})
+                  </span>
+                </h3>
                 <ResponsiveContainer width="100%" height={400}>
                   <LineChart data={predictionData}>
                     <CartesianGrid strokeDasharray="3 3" />
@@ -1273,17 +1509,27 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                     <YAxis />
                     <Tooltip />
                     <Legend />
-                    <Line type="monotone" dataKey="defauts" stroke="#ef4444" name="Défauts prédits (%)" strokeWidth={2} />
-                    <Line type="monotone" dataKey="retards" stroke="#3b82f6" name="Retard prédit (j)" strokeWidth={2} />
+                    {/* Only show defects line if case supports it */}
+                    {showDefects && (
+                      <Line type="monotone" dataKey="defauts" stroke="#ef4444" name="Défauts prédits (%)" strokeWidth={2} />
+                    )}
+                    {/* Only show delays line if case supports it */}
+                    {showDelays && (
+                      <Line type="monotone" dataKey="retards" stroke="#3b82f6" name="Retard prédit (j)" strokeWidth={2} />
+                    )}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
             )}
 
-            {/* Multi-Model Comparison Charts - shown when in multi-model mode */}
+            {/* ============================================
+                CASE-SPECIFIC MULTI-MODEL COMPARISON CHARTS
+                Only shows charts relevant to the current case type
+            ============================================ */}
             {multiModelMode && (
               <>
-                {/* Defects Comparison Chart */}
+                {/* Defects Comparison Chart - Only shown for Case B and Case C */}
+                {showDefects && (
                 <div className="bg-white rounded-xl p-6 shadow">
                   <h3 className="font-semibold text-gray-900 mb-4">
                     Comparaison des Prédictions de Défauts (%)
@@ -1323,8 +1569,10 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
+                )}
 
-                {/* Delay Comparison Chart */}
+                {/* Delay Comparison Chart - Only shown for Case A and Case C */}
+                {showDelays && (
                 <div className="bg-white rounded-xl p-6 shadow">
                   <h3 className="font-semibold text-gray-900 mb-4">
                     Comparaison des Prédictions de Retards (jours)
@@ -1364,10 +1612,14 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
+                )}
               </>
             )}
 
-            {/* Predictions Table - adapts based on mode */}
+            {/* ============================================
+                CASE-SPECIFIC PREDICTIONS TABLE
+                Adapts columns based on case type
+            ============================================ */}
             <div className="bg-white rounded-xl shadow overflow-hidden">
               <div className="p-4 border-b bg-gray-50">
                 <h3 className="font-semibold text-gray-900">
@@ -1485,16 +1737,20 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                       <h4 className="font-semibold text-green-800">Moyenne Glissante</h4>
                     </div>
                     <div className="space-y-2 text-sm">
+                      {showDefects && (
                       <p className="text-gray-600">
                         Moy. Défauts: <span className="font-semibold text-green-700">
-                          {(multiModelPredictionData.reduce((acc, p) => acc + p.defauts_ma, 0) / multiModelPredictionData.length).toFixed(2)}%
+                          {(multiModelPredictionData.reduce((acc, p) => acc + (p.defauts_ma ?? 0), 0) / multiModelPredictionData.length).toFixed(2)}%
                         </span>
                       </p>
+                      )}
+                      {showDelays && (
                       <p className="text-gray-600">
                         Moy. Retards: <span className="font-semibold text-green-700">
-                          {(multiModelPredictionData.reduce((acc, p) => acc + p.retards_ma, 0) / multiModelPredictionData.length).toFixed(2)}j
+                          {(multiModelPredictionData.reduce((acc, p) => acc + (p.retards_ma ?? 0), 0) / multiModelPredictionData.length).toFixed(2)}j
                         </span>
                       </p>
+                      )}
                     </div>
                   </div>
 
@@ -1505,16 +1761,20 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                       <h4 className="font-semibold text-blue-800">Régression Linéaire</h4>
                     </div>
                     <div className="space-y-2 text-sm">
+                      {showDefects && (
                       <p className="text-gray-600">
                         Moy. Défauts: <span className="font-semibold text-blue-700">
-                          {(multiModelPredictionData.reduce((acc, p) => acc + p.defauts_lr, 0) / multiModelPredictionData.length).toFixed(2)}%
+                          {(multiModelPredictionData.reduce((acc, p) => acc + (p.defauts_lr ?? 0), 0) / multiModelPredictionData.length).toFixed(2)}%
                         </span>
                       </p>
+                      )}
+                      {showDelays && (
                       <p className="text-gray-600">
                         Moy. Retards: <span className="font-semibold text-blue-700">
-                          {(multiModelPredictionData.reduce((acc, p) => acc + p.retards_lr, 0) / multiModelPredictionData.length).toFixed(2)}j
+                          {(multiModelPredictionData.reduce((acc, p) => acc + (p.retards_lr ?? 0), 0) / multiModelPredictionData.length).toFixed(2)}j
                         </span>
                       </p>
+                      )}
                     </div>
                   </div>
 
@@ -1525,16 +1785,20 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                       <h4 className="font-semibold text-orange-800">Lissage Exponentiel</h4>
                     </div>
                     <div className="space-y-2 text-sm">
+                      {showDefects && (
                       <p className="text-gray-600">
                         Moy. Défauts: <span className="font-semibold text-orange-700">
-                          {(multiModelPredictionData.reduce((acc, p) => acc + p.defauts_exp, 0) / multiModelPredictionData.length).toFixed(2)}%
+                          {(multiModelPredictionData.reduce((acc, p) => acc + (p.defauts_exp ?? 0), 0) / multiModelPredictionData.length).toFixed(2)}%
                         </span>
                       </p>
+                      )}
+                      {showDelays && (
                       <p className="text-gray-600">
                         Moy. Retards: <span className="font-semibold text-orange-700">
-                          {(multiModelPredictionData.reduce((acc, p) => acc + p.retards_exp, 0) / multiModelPredictionData.length).toFixed(2)}j
+                          {(multiModelPredictionData.reduce((acc, p) => acc + (p.retards_exp ?? 0), 0) / multiModelPredictionData.length).toFixed(2)}j
                         </span>
                       </p>
+                      )}
                     </div>
                   </div>
                 </div>
