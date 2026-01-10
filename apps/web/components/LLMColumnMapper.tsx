@@ -1,0 +1,438 @@
+'use client';
+/**
+ * LLMColumnMapper Component
+ * 
+ * Displays LLM-suggested column mappings and allows users to:
+ * - Review suggested mappings with confidence scores
+ * - Edit/override suggested mappings
+ * - See warnings and issues
+ * - Apply mappings to normalize data
+ * 
+ * The LLM only SUGGESTS mappings - all transformations are done by Python.
+ */
+
+import { useState, useEffect } from 'react';
+import {
+  Check, X, AlertTriangle, Info, ChevronDown, ChevronUp,
+  RefreshCw, ArrowRight, Edit2, HelpCircle, Zap
+} from 'lucide-react';
+
+// ============================================
+// TYPE DEFINITIONS
+// ============================================
+
+interface ColumnMapping {
+  source_column: string;
+  target_role: string;
+  confidence: number;
+  reasoning: string;
+  sample_values: string[];
+  detected_type: string;
+  transformation_needed: string | null;
+}
+
+interface ColumnAnalysis {
+  column: string;
+  detected_type: string;
+  sample_values: string[];
+  null_count: number;
+  unique_count: number;
+}
+
+interface Issue {
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+}
+
+interface AnalysisResult {
+  mappings: ColumnMapping[];
+  column_analysis: ColumnAnalysis[];
+  detected_case: string;
+  issues: Issue[];
+  recommendation: string;
+}
+
+interface LLMColumnMapperProps {
+  analysis: AnalysisResult;
+  originalColumns: string[];
+  onApply: (mappings: ColumnMapping[], targetCase: string) => void;
+  onCancel: () => void;
+  loading?: boolean;
+}
+
+// ============================================
+// CONSTANTS
+// ============================================
+
+// Available target roles with descriptions
+const TARGET_ROLES = [
+  { value: 'supplier', label: 'Fournisseur', description: 'Nom du fournisseur', icon: '🏭' },
+  { value: 'date_promised', label: 'Date Promise', description: 'Date de livraison prévue', icon: '📅' },
+  { value: 'date_delivered', label: 'Date Livrée', description: 'Date de livraison effective', icon: '✅' },
+  { value: 'order_date', label: 'Date Commande', description: 'Date de la commande', icon: '📦' },
+  { value: 'delay', label: 'Retard (jours)', description: 'Nombre de jours de retard', icon: '⏰' },
+  { value: 'defects', label: 'Défauts', description: 'Taux de défauts (0-1 ou 0-100%)', icon: '🔍' },
+  { value: 'quality_score', label: 'Score Qualité', description: 'Score de qualité (sera converti)', icon: '⭐' },
+  { value: 'ignore', label: 'Ignorer', description: 'Ne pas importer cette colonne', icon: '🚫' },
+];
+
+// Case types with descriptions
+const CASE_TYPES = [
+  { value: 'delay_only', label: 'Case A - Retards', description: 'Analyse des retards uniquement', color: 'blue' },
+  { value: 'defects_only', label: 'Case B - Défauts', description: 'Analyse des défauts uniquement', color: 'purple' },
+  { value: 'mixed', label: 'Case C - Mixte', description: 'Retards ET défauts combinés', color: 'green' },
+];
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+function getConfidenceColor(confidence: number): string {
+  if (confidence >= 0.8) return 'text-green-600 bg-green-100';
+  if (confidence >= 0.5) return 'text-yellow-600 bg-yellow-100';
+  return 'text-red-600 bg-red-100';
+}
+
+function getConfidenceLabel(confidence: number): string {
+  if (confidence >= 0.8) return 'Haute';
+  if (confidence >= 0.5) return 'Moyenne';
+  return 'Faible';
+}
+
+function getSeverityIcon(severity: string) {
+  switch (severity) {
+    case 'error': return <X className="w-4 h-4 text-red-500" />;
+    case 'warning': return <AlertTriangle className="w-4 h-4 text-yellow-500" />;
+    default: return <Info className="w-4 h-4 text-blue-500" />;
+  }
+}
+
+function getSeverityColor(severity: string): string {
+  switch (severity) {
+    case 'error': return 'bg-red-50 border-red-200 text-red-700';
+    case 'warning': return 'bg-yellow-50 border-yellow-200 text-yellow-700';
+    default: return 'bg-blue-50 border-blue-200 text-blue-700';
+  }
+}
+
+// ============================================
+// MAIN COMPONENT
+// ============================================
+
+export default function LLMColumnMapper({
+  analysis,
+  originalColumns,
+  onApply,
+  onCancel,
+  loading = false
+}: LLMColumnMapperProps) {
+  // State for editable mappings
+  const [editedMappings, setEditedMappings] = useState<ColumnMapping[]>(analysis.mappings);
+  const [selectedCase, setSelectedCase] = useState<string>(analysis.detected_case);
+  const [expandedColumns, setExpandedColumns] = useState<Set<string>>(new Set());
+  const [showAllColumns, setShowAllColumns] = useState(false);
+
+  // Sync with analysis when it changes
+  useEffect(() => {
+    setEditedMappings(analysis.mappings);
+    setSelectedCase(analysis.detected_case);
+  }, [analysis]);
+
+  // ============================================
+  // HANDLERS
+  // ============================================
+
+  const handleMappingChange = (sourceColumn: string, newRole: string) => {
+    setEditedMappings(prev => prev.map(m => 
+      m.source_column === sourceColumn
+        ? { ...m, target_role: newRole, confidence: 1.0 }
+        : m
+    ));
+  };
+
+  const toggleColumnExpand = (column: string) => {
+    setExpandedColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(column)) {
+        next.delete(column);
+      } else {
+        next.add(column);
+      }
+      return next;
+    });
+  };
+
+  const handleApply = () => {
+    onApply(editedMappings, selectedCase);
+  };
+
+  // ============================================
+  // VALIDATION
+  // ============================================
+
+  const validationErrors = [];
+  const mappedRoles = new Set(editedMappings.filter(m => m.target_role !== 'ignore').map(m => m.target_role));
+
+  // Must have supplier
+  if (!mappedRoles.has('supplier')) {
+    validationErrors.push('Une colonne doit être mappée à "Fournisseur"');
+  }
+
+  // Case-specific validation
+  if (selectedCase === 'delay_only') {
+    if (!mappedRoles.has('date_promised') || !mappedRoles.has('date_delivered')) {
+      if (!mappedRoles.has('delay')) {
+        validationErrors.push('Case A nécessite des colonnes de dates ou une colonne de retard');
+      }
+    }
+  } else if (selectedCase === 'defects_only') {
+    if (!mappedRoles.has('defects') && !mappedRoles.has('quality_score')) {
+      validationErrors.push('Case B nécessite une colonne de défauts ou de qualité');
+    }
+  } else if (selectedCase === 'mixed') {
+    const hasDelayInfo = mappedRoles.has('delay') || (mappedRoles.has('date_promised') && mappedRoles.has('date_delivered'));
+    const hasDefectInfo = mappedRoles.has('defects') || mappedRoles.has('quality_score');
+    if (!hasDelayInfo || !hasDefectInfo) {
+      validationErrors.push('Case C nécessite des données de retard ET de défauts');
+    }
+  }
+
+  const canApply = validationErrors.length === 0;
+
+  // ============================================
+  // RENDER
+  // ============================================
+
+  // Filter to show important mappings first
+  const importantMappings = editedMappings.filter(m => m.target_role !== 'ignore' || m.confidence < 0.5);
+  const otherMappings = editedMappings.filter(m => m.target_role === 'ignore' && m.confidence >= 0.5);
+  const displayMappings = showAllColumns ? editedMappings : importantMappings;
+
+  return (
+    <div className="bg-white rounded-lg shadow-lg max-w-4xl mx-auto">
+      {/* Header */}
+      <div className="p-6 border-b border-gray-200">
+        <div className="flex items-center gap-3 mb-2">
+          <Zap className="w-6 h-6 text-yellow-500" />
+          <h2 className="text-xl font-bold text-gray-900">Mapping Intelligent des Colonnes</h2>
+        </div>
+        <p className="text-gray-600">
+          L'IA a analysé votre fichier et suggère les mappings ci-dessous. Vous pouvez les modifier avant d'importer.
+        </p>
+      </div>
+
+      {/* Issues Section */}
+      {analysis.issues.length > 0 && (
+        <div className="p-4 border-b border-gray-200">
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Avertissements</h3>
+          <div className="space-y-2">
+            {analysis.issues.map((issue, idx) => (
+              <div 
+                key={idx} 
+                className={`flex items-start gap-2 p-2 rounded border ${getSeverityColor(issue.severity)}`}
+              >
+                {getSeverityIcon(issue.severity)}
+                <span className="text-sm">{issue.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Case Selection */}
+      <div className="p-4 border-b border-gray-200 bg-gray-50">
+        <h3 className="text-sm font-medium text-gray-700 mb-3">Type de Données Détecté</h3>
+        <div className="grid grid-cols-3 gap-3">
+          {CASE_TYPES.map(caseType => (
+            <button
+              key={caseType.value}
+              onClick={() => setSelectedCase(caseType.value)}
+              className={`p-3 rounded-lg border-2 text-left transition-all ${
+                selectedCase === caseType.value
+                  ? `border-${caseType.color}-500 bg-${caseType.color}-50`
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <div className="font-medium text-gray-900">{caseType.label}</div>
+              <div className="text-xs text-gray-500">{caseType.description}</div>
+            </button>
+          ))}
+        </div>
+        {analysis.detected_case && selectedCase !== analysis.detected_case && (
+          <div className="mt-2 text-sm text-yellow-600 flex items-center gap-1">
+            <AlertTriangle className="w-4 h-4" />
+            Le cas sélectionné diffère du cas détecté automatiquement
+          </div>
+        )}
+      </div>
+
+      {/* Recommendation */}
+      <div className="p-4 bg-blue-50 border-b border-blue-100">
+        <div className="flex items-center gap-2 text-blue-700">
+          <Info className="w-5 h-5" />
+          <span className="font-medium">{analysis.recommendation}</span>
+        </div>
+      </div>
+
+      {/* Column Mappings */}
+      <div className="p-4">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-medium text-gray-700">
+            Mappings des Colonnes ({editedMappings.length} colonnes)
+          </h3>
+          <button
+            onClick={() => setShowAllColumns(!showAllColumns)}
+            className="text-sm text-blue-600 hover:text-blue-800"
+          >
+            {showAllColumns ? 'Masquer les colonnes ignorées' : `Afficher toutes (${otherMappings.length} ignorées)`}
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          {displayMappings.map(mapping => (
+            <div 
+              key={mapping.source_column}
+              className="border rounded-lg overflow-hidden"
+            >
+              {/* Mapping Row */}
+              <div className="flex items-center gap-4 p-3 bg-white">
+                {/* Source Column */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm font-medium text-gray-900 truncate">
+                      {mapping.source_column}
+                    </span>
+                    <span className="text-xs text-gray-500 px-1.5 py-0.5 bg-gray-100 rounded">
+                      {mapping.detected_type}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500 truncate">
+                    Ex: {mapping.sample_values.slice(0, 3).join(', ')}
+                  </div>
+                </div>
+
+                {/* Arrow */}
+                <ArrowRight className="w-5 h-5 text-gray-400 flex-shrink-0" />
+
+                {/* Target Role Selector */}
+                <div className="flex-1 min-w-0">
+                  <select
+                    value={mapping.target_role}
+                    onChange={(e) => handleMappingChange(mapping.source_column, e.target.value)}
+                    className={`w-full px-3 py-2 border rounded-lg text-sm ${
+                      mapping.target_role === 'ignore' 
+                        ? 'bg-gray-50 text-gray-500' 
+                        : 'bg-white text-gray-900'
+                    }`}
+                  >
+                    {TARGET_ROLES.map(role => (
+                      <option key={role.value} value={role.value}>
+                        {role.icon} {role.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Confidence Badge */}
+                <div className="flex-shrink-0">
+                  <span className={`text-xs px-2 py-1 rounded-full font-medium ${getConfidenceColor(mapping.confidence)}`}>
+                    {getConfidenceLabel(mapping.confidence)} ({Math.round(mapping.confidence * 100)}%)
+                  </span>
+                </div>
+
+                {/* Expand Button */}
+                <button
+                  onClick={() => toggleColumnExpand(mapping.source_column)}
+                  className="p-1 text-gray-400 hover:text-gray-600"
+                >
+                  {expandedColumns.has(mapping.source_column) 
+                    ? <ChevronUp className="w-5 h-5" />
+                    : <ChevronDown className="w-5 h-5" />
+                  }
+                </button>
+              </div>
+
+              {/* Expanded Details */}
+              {expandedColumns.has(mapping.source_column) && (
+                <div className="p-3 bg-gray-50 border-t text-sm">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="text-gray-500">Raison du mapping:</span>
+                      <p className="text-gray-700">{mapping.reasoning}</p>
+                    </div>
+                    {mapping.transformation_needed && (
+                      <div>
+                        <span className="text-gray-500">Transformation requise:</span>
+                        <p className="text-blue-600">{mapping.transformation_needed}</p>
+                      </div>
+                    )}
+                    <div>
+                      <span className="text-gray-500">Valeurs exemple:</span>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {mapping.sample_values.slice(0, 5).map((v, i) => (
+                          <span key={i} className="px-2 py-0.5 bg-gray-200 rounded text-xs">
+                            {v}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Validation Errors */}
+      {validationErrors.length > 0 && (
+        <div className="p-4 border-t border-red-100 bg-red-50">
+          <h4 className="text-sm font-medium text-red-700 mb-2">Erreurs de validation</h4>
+          <ul className="list-disc list-inside text-sm text-red-600 space-y-1">
+            {validationErrors.map((error, idx) => (
+              <li key={idx}>{error}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Footer Actions */}
+      <div className="p-4 border-t border-gray-200 bg-gray-50 flex items-center justify-between">
+        <button
+          onClick={onCancel}
+          className="px-4 py-2 text-gray-700 hover:text-gray-900"
+          disabled={loading}
+        >
+          Annuler
+        </button>
+
+        <div className="flex items-center gap-3">
+          <div className="text-sm text-gray-500">
+            {editedMappings.filter(m => m.target_role !== 'ignore').length} colonnes mappées
+          </div>
+          <button
+            onClick={handleApply}
+            disabled={!canApply || loading}
+            className={`flex items-center gap-2 px-6 py-2 rounded-lg font-medium transition-colors ${
+              canApply && !loading
+                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+            }`}
+          >
+            {loading ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Traitement...
+              </>
+            ) : (
+              <>
+                <Check className="w-4 h-4" />
+                Appliquer et Importer
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

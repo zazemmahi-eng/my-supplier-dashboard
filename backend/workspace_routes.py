@@ -30,6 +30,13 @@ from backend.mon_analyse import (
     calculer_distribution_risques,
     comparer_methodes_prediction
 )
+# LLM-based ingestion module for intelligent column mapping
+from backend.llm_ingestion import (
+    analyze_csv_for_mapping,
+    apply_mappings_and_normalize,
+    process_csv_with_llm_mapping,
+    ColumnRole
+)
 
 # Get backend directory for sample files
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -629,6 +636,340 @@ async def upload_dataset(
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur de traitement: {str(e)}")
+
+
+# ============================================
+# LLM-BASED CSV INGESTION ENDPOINTS
+# Intelligent column mapping for arbitrary CSVs
+# ============================================
+
+class ColumnMappingRequest(BaseModel):
+    """Schema for approving/editing column mappings"""
+    source_column: str
+    target_role: str  # supplier, date_promised, date_delivered, order_date, delay, defects, quality_score, ignore
+    confidence: float = 1.0
+    transformation_needed: Optional[str] = None
+
+
+class ApplyMappingsRequest(BaseModel):
+    """Schema for applying approved mappings"""
+    mappings: List[ColumnMappingRequest]
+    target_case: str  # delay_only, defects_only, mixed
+
+
+@router.post("/{workspace_id}/upload/analyze", response_model=Dict[str, Any])
+async def analyze_csv_for_llm_mapping(
+    workspace_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Step 1 of LLM-based ingestion: Analyze CSV and suggest column mappings.
+    
+    The LLM analyzes column names and sample data to suggest appropriate mappings.
+    Returns mapping suggestions with confidence scores and detected issues.
+    
+    User can review and edit mappings before applying them.
+    """
+    # Validate workspace exists
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    # Validate file type
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Format invalide. Fichier CSV requis.")
+    
+    try:
+        # Read CSV
+        content = await file.read()
+        df = pd.read_csv(io.BytesIO(content))
+        
+        if df.empty:
+            raise HTTPException(status_code=400, detail="Le fichier CSV est vide.")
+        
+        # Analyze CSV with LLM-style column detection
+        analysis = analyze_csv_for_mapping(df)
+        
+        # Store the raw CSV content temporarily in session/cache
+        # For now, we'll return it encoded so frontend can send it back
+        import base64
+        csv_content_b64 = base64.b64encode(content).decode('utf-8')
+        
+        return {
+            "success": True,
+            "filename": file.filename,
+            "row_count": len(df),
+            "column_count": len(df.columns),
+            "original_columns": list(df.columns),
+            "analysis": analysis,
+            "csv_content": csv_content_b64,  # Send back for step 2
+            "workspace_data_type": workspace.data_type.value,
+            "message": "Analyse terminée. Veuillez vérifier les mappings suggérés."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur d'analyse: {str(e)}")
+
+
+@router.post("/{workspace_id}/upload/apply-mappings", response_model=Dict[str, Any])
+async def apply_llm_mappings(
+    workspace_id: uuid.UUID,
+    csv_content: str = Query(..., description="Base64 encoded CSV content"),
+    mappings: str = Query(..., description="JSON string of approved mappings"),
+    target_case: str = Query(..., description="Target case: delay_only, defects_only, mixed"),
+    filename: str = Query("uploaded.csv", description="Original filename"),
+    db: Session = Depends(get_db)
+):
+    """
+    Step 2 of LLM-based ingestion: Apply approved mappings and normalize data.
+    
+    Takes the user-approved column mappings and applies all transformations:
+    - Parses dates in multiple formats
+    - Computes delay from dates if needed
+    - Normalizes defects to 0-1 range
+    - Validates all constraints
+    
+    All transformations are done by Python code, NOT the LLM.
+    """
+    import base64
+    import json
+    
+    # Validate workspace exists
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    try:
+        # Decode CSV content
+        csv_bytes = base64.b64decode(csv_content)
+        df = pd.read_csv(io.BytesIO(csv_bytes))
+        
+        # Parse mappings
+        approved_mappings = json.loads(mappings)
+        
+        # Map target_case to DataTypeCase
+        case_mapping = {
+            "delay_only": DataTypeCase.CASE_A,
+            "defects_only": DataTypeCase.CASE_B,
+            "mixed": DataTypeCase.CASE_C
+        }
+        data_type = case_mapping.get(target_case, workspace.data_type)
+        
+        # Apply mappings and normalize using the LLM ingestion module
+        result = apply_mappings_and_normalize(df, approved_mappings, target_case)
+        
+        if not result.success:
+            return {
+                "success": False,
+                "warnings": [w.message for w in result.warnings if w.severity == "warning"],
+                "errors": [w.message for w in result.warnings if w.severity == "error"],
+                "transformations": [t.details for t in result.transformations],
+                "message": "La normalisation a échoué. Veuillez corriger les erreurs."
+            }
+        
+        # Process with case-specific logic for backward compatibility
+        processed_df = result.dataframe
+        
+        # Deactivate previous datasets
+        db.query(WorkspaceDataset).filter(
+            WorkspaceDataset.workspace_id == workspace_id
+        ).update({"is_active": False})
+        
+        # Get date range
+        date_col = "date_promised" if "date_promised" in processed_df.columns else "order_date"
+        if date_col in processed_df.columns:
+            date_start = processed_df[date_col].min()
+            date_end = processed_df[date_col].max()
+        else:
+            date_start = date_end = None
+        
+        # Convert for JSON serialization
+        df_for_json = processed_df.copy()
+        for col in df_for_json.columns:
+            if pd.api.types.is_datetime64_any_dtype(df_for_json[col]):
+                df_for_json[col] = df_for_json[col].dt.strftime("%Y-%m-%d")
+        
+        # Convert dates
+        date_start_py = pd.to_datetime(date_start).to_pydatetime() if pd.notna(date_start) else None
+        date_end_py = pd.to_datetime(date_end).to_pydatetime() if pd.notna(date_end) else None
+        
+        # Update workspace data_type to match target case
+        workspace.data_type = data_type
+        
+        # Create new dataset record
+        new_dataset = WorkspaceDataset(
+            workspace_id=workspace_id,
+            filename=filename,
+            row_count=len(processed_df),
+            column_count=len(processed_df.columns),
+            suppliers=processed_df["supplier"].unique().tolist() if "supplier" in processed_df.columns else [],
+            date_start=date_start_py,
+            date_end=date_end_py,
+            data_json=df_for_json.to_dict(orient='records'),
+            is_active=True
+        )
+        
+        db.add(new_dataset)
+        db.commit()
+        db.refresh(new_dataset)
+        
+        return {
+            "success": True,
+            "message": f"Données normalisées et importées avec succès (Case: {target_case})",
+            "dataset_id": str(new_dataset.id),
+            "summary": result.summary,
+            "transformations": [t.details for t in result.transformations],
+            "warnings": [w.message for w in result.warnings if w.severity == "warning"],
+            "detected_case": result.detected_case
+        }
+        
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Format de mappings invalide")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erreur de traitement: {str(e)}")
+
+
+@router.post("/{workspace_id}/upload/smart", response_model=Dict[str, Any])
+async def smart_upload_with_llm(
+    workspace_id: uuid.UUID,
+    file: UploadFile = File(...),
+    auto_apply: bool = Query(False, description="Auto-apply high confidence mappings"),
+    db: Session = Depends(get_db)
+):
+    """
+    Combined LLM-based ingestion: Analyze and optionally auto-apply mappings.
+    
+    If auto_apply=True and all mappings have high confidence (>0.8), 
+    automatically applies mappings and imports data.
+    
+    Otherwise, returns analysis for user review.
+    """
+    # Validate workspace exists
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    # Validate file type
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Format invalide. Fichier CSV requis.")
+    
+    try:
+        # Read CSV
+        content = await file.read()
+        df = pd.read_csv(io.BytesIO(content))
+        
+        if df.empty:
+            raise HTTPException(status_code=400, detail="Le fichier CSV est vide.")
+        
+        # Analyze CSV
+        analysis = analyze_csv_for_mapping(df)
+        
+        # Check if all mappings have high confidence
+        all_high_confidence = all(
+            m["confidence"] > 0.8 
+            for m in analysis["mappings"] 
+            if m["target_role"] != "ignore"
+        )
+        
+        no_errors = not any(i["severity"] == "error" for i in analysis.get("issues", []))
+        
+        if auto_apply and all_high_confidence and no_errors:
+            # Auto-apply mappings
+            result = process_csv_with_llm_mapping(
+                df, 
+                user_mappings=analysis["mappings"],
+                target_case=analysis["detected_case"]
+            )
+            
+            if result.success:
+                # Save to database
+                processed_df = result.dataframe
+                
+                # Deactivate previous datasets
+                db.query(WorkspaceDataset).filter(
+                    WorkspaceDataset.workspace_id == workspace_id
+                ).update({"is_active": False})
+                
+                # Map detected case to DataTypeCase
+                case_mapping = {
+                    "delay_only": DataTypeCase.CASE_A,
+                    "defects_only": DataTypeCase.CASE_B,
+                    "mixed": DataTypeCase.CASE_C
+                }
+                data_type = case_mapping.get(result.detected_case, workspace.data_type)
+                workspace.data_type = data_type
+                
+                # Get date range
+                date_col = "date_promised" if "date_promised" in processed_df.columns else "order_date"
+                if date_col in processed_df.columns:
+                    date_start = processed_df[date_col].min()
+                    date_end = processed_df[date_col].max()
+                else:
+                    date_start = date_end = None
+                
+                # Convert for JSON
+                df_for_json = processed_df.copy()
+                for col in df_for_json.columns:
+                    if pd.api.types.is_datetime64_any_dtype(df_for_json[col]):
+                        df_for_json[col] = df_for_json[col].dt.strftime("%Y-%m-%d")
+                
+                date_start_py = pd.to_datetime(date_start).to_pydatetime() if pd.notna(date_start) else None
+                date_end_py = pd.to_datetime(date_end).to_pydatetime() if pd.notna(date_end) else None
+                
+                new_dataset = WorkspaceDataset(
+                    workspace_id=workspace_id,
+                    filename=file.filename,
+                    row_count=len(processed_df),
+                    column_count=len(processed_df.columns),
+                    suppliers=processed_df["supplier"].unique().tolist() if "supplier" in processed_df.columns else [],
+                    date_start=date_start_py,
+                    date_end=date_end_py,
+                    data_json=df_for_json.to_dict(orient='records'),
+                    is_active=True
+                )
+                
+                db.add(new_dataset)
+                db.commit()
+                db.refresh(new_dataset)
+                
+                return {
+                    "success": True,
+                    "auto_applied": True,
+                    "message": f"Données importées automatiquement (Case: {result.detected_case})",
+                    "dataset_id": str(new_dataset.id),
+                    "summary": result.summary,
+                    "transformations": [t.details for t in result.transformations],
+                    "warnings": [w.message for w in result.warnings if w.severity == "warning"]
+                }
+        
+        # Return analysis for manual review
+        import base64
+        csv_content_b64 = base64.b64encode(content).decode('utf-8')
+        
+        return {
+            "success": True,
+            "auto_applied": False,
+            "needs_review": True,
+            "filename": file.filename,
+            "row_count": len(df),
+            "column_count": len(df.columns),
+            "original_columns": list(df.columns),
+            "analysis": analysis,
+            "csv_content": csv_content_b64,
+            "message": "Certains mappings nécessitent une vérification manuelle."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erreur de traitement: {str(e)}")
 
 
@@ -1437,3 +1778,415 @@ async def get_supplier_analysis(
         "prediction_comparison": comparison,
         "recommended_actions": supplier_actions
     }
+
+
+# ============================================
+# MULTI-MODEL COMPARISON ENDPOINTS
+# Run and compare predictions from multiple models
+# ============================================
+
+@router.get("/{workspace_id}/analysis/multi-model")
+async def get_multi_model_predictions(
+    workspace_id: uuid.UUID,
+    models: str = Query("all", description="Comma-separated model IDs or 'all'"),
+    supplier: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Run predictions using multiple models and return side-by-side comparison.
+    
+    Models available: moving_average, linear_regression, exponential, combined
+    
+    Returns predictions from each selected model for comparison.
+    """
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    df = get_workspace_dataframe(workspace_id, db)
+    if df is None or df.empty:
+        raise HTTPException(status_code=400, detail="Aucune donnée disponible")
+    
+    # Get model parameters
+    model_sel = db.query(ModelSelection).filter(
+        ModelSelection.workspace_id == workspace_id
+    ).first()
+    
+    fenetre = 3
+    alpha = 0.3
+    if model_sel and model_sel.parameters:
+        fenetre = model_sel.parameters.get("fenetre", 3)
+        alpha = model_sel.parameters.get("alpha", 0.3)
+    
+    # Determine which models to run
+    available_models = ["moving_average", "linear_regression", "exponential", "combined"]
+    if models == "all":
+        selected_models = available_models
+    else:
+        selected_models = [m.strip() for m in models.split(",") if m.strip() in available_models]
+    
+    if not selected_models:
+        raise HTTPException(status_code=400, detail="Aucun modèle valide sélectionné")
+    
+    # Filter by supplier if specified
+    suppliers = [supplier] if supplier else df['supplier'].unique().tolist()
+    
+    # Calculate predictions for each model and supplier
+    from backend.mon_analyse import (
+        prediction_moyenne_mobile,
+        prediction_regression_lineaire,
+        prediction_lissage_exponentiel
+    )
+    
+    results = []
+    
+    for sup in suppliers:
+        supplier_df = df[df['supplier'] == sup]
+        if len(supplier_df) < 2:
+            continue
+        
+        delays = supplier_df['delay'].values
+        defects = supplier_df['defects'].values
+        n_orders = len(supplier_df)
+        
+        supplier_result = {
+            "supplier": sup,
+            "nb_commandes": n_orders,
+            "predictions": {}
+        }
+        
+        # Moving Average
+        if "moving_average" in selected_models:
+            ma_delay = prediction_moyenne_mobile(delays, fenetre)
+            ma_defect = prediction_moyenne_mobile(defects * 100, fenetre)  # Convert to percentage
+            supplier_result["predictions"]["moving_average"] = {
+                "delay": round(ma_delay, 1) if ma_delay else None,
+                "defect": round(ma_defect, 2) if ma_defect else None,
+                "name": "Moyenne Glissante",
+                "parameters": {"fenetre": fenetre}
+            }
+        
+        # Linear Regression
+        if "linear_regression" in selected_models:
+            lr_delay = prediction_regression_lineaire(delays)
+            lr_defect = prediction_regression_lineaire(defects * 100)
+            supplier_result["predictions"]["linear_regression"] = {
+                "delay": round(lr_delay, 1) if lr_delay else None,
+                "defect": round(lr_defect, 2) if lr_defect else None,
+                "name": "Régression Linéaire",
+                "parameters": {}
+            }
+        
+        # Exponential Smoothing
+        if "exponential" in selected_models:
+            exp_delay = prediction_lissage_exponentiel(delays, alpha)
+            exp_defect = prediction_lissage_exponentiel(defects * 100, alpha)
+            supplier_result["predictions"]["exponential"] = {
+                "delay": round(exp_delay, 1) if exp_delay else None,
+                "defect": round(exp_defect, 2) if exp_defect else None,
+                "name": "Lissage Exponentiel",
+                "parameters": {"alpha": alpha}
+            }
+        
+        # Combined (average of all methods)
+        if "combined" in selected_models:
+            all_delays = []
+            all_defects = []
+            
+            ma_d = prediction_moyenne_mobile(delays, fenetre)
+            lr_d = prediction_regression_lineaire(delays)
+            exp_d = prediction_lissage_exponentiel(delays, alpha)
+            
+            ma_def = prediction_moyenne_mobile(defects * 100, fenetre)
+            lr_def = prediction_regression_lineaire(defects * 100)
+            exp_def = prediction_lissage_exponentiel(defects * 100, alpha)
+            
+            for v in [ma_d, lr_d, exp_d]:
+                if v is not None:
+                    all_delays.append(v)
+            for v in [ma_def, lr_def, exp_def]:
+                if v is not None:
+                    all_defects.append(v)
+            
+            combined_delay = sum(all_delays) / len(all_delays) if all_delays else None
+            combined_defect = sum(all_defects) / len(all_defects) if all_defects else None
+            
+            supplier_result["predictions"]["combined"] = {
+                "delay": round(combined_delay, 1) if combined_delay else None,
+                "defect": round(combined_defect, 2) if combined_defect else None,
+                "name": "Combiné (Moyenne)",
+                "parameters": {"fenetre": fenetre, "alpha": alpha}
+            }
+        
+        # Add case-specific filtering
+        if workspace.data_type == DataTypeCase.CASE_A:
+            # Delay only: null out defect predictions
+            for model in supplier_result["predictions"].values():
+                model["defect"] = None
+        elif workspace.data_type == DataTypeCase.CASE_B:
+            # Defects only: null out delay predictions
+            for model in supplier_result["predictions"].values():
+                model["delay"] = None
+        
+        results.append(supplier_result)
+    
+    return {
+        "workspace_id": str(workspace_id),
+        "case_type": workspace.data_type.value,
+        "selected_models": selected_models,
+        "parameters": {"fenetre": fenetre, "alpha": alpha},
+        "results": results,
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+# ============================================
+# EXPORT ENDPOINTS (PDF/Excel)
+# ============================================
+
+@router.get("/{workspace_id}/export/excel")
+async def export_to_excel(
+    workspace_id: uuid.UUID,
+    include_dashboard: bool = Query(True, description="Include dashboard KPIs"),
+    include_predictions: bool = Query(True, description="Include predictions"),
+    include_actions: bool = Query(True, description="Include recommended actions"),
+    supplier: Optional[str] = Query(None, description="Filter by supplier"),
+    db: Session = Depends(get_db)
+):
+    """
+    Export workspace data, dashboard, and predictions to Excel format.
+    Supports filtering by supplier.
+    """
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    df = get_workspace_dataframe(workspace_id, db)
+    if df is None or df.empty:
+        raise HTTPException(status_code=400, detail="Aucune donnée disponible")
+    
+    try:
+        # Filter by supplier if specified
+        if supplier:
+            df = df[df['supplier'] == supplier]
+            if df.empty:
+                raise HTTPException(status_code=404, detail=f"Fournisseur '{supplier}' non trouvé")
+        
+        # Create Excel file in memory
+        output = io.BytesIO()
+        
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # Sheet 1: Raw Data
+            df_export = df.copy()
+            df_export.to_excel(writer, sheet_name='Données', index=False)
+            
+            # Sheet 2: Dashboard KPIs
+            if include_dashboard:
+                kpis = calculate_case_specific_kpis(df, workspace.data_type)
+                kpi_df = pd.DataFrame([
+                    {"KPI": k, "Valeur": v} for k, v in kpis.items()
+                ])
+                kpi_df.to_excel(writer, sheet_name='KPIs', index=False)
+            
+            # Sheet 3: Supplier Risks
+            risques = calculate_case_specific_supplier_risks(df, workspace.data_type)
+            if supplier:
+                risques = [r for r in risques if r['supplier'] == supplier]
+            risques_df = pd.DataFrame(risques)
+            risques_df.to_excel(writer, sheet_name='Risques Fournisseurs', index=False)
+            
+            # Sheet 4: Predictions
+            if include_predictions:
+                predictions = calculate_case_specific_predictions(df, workspace.data_type)
+                if supplier:
+                    predictions = [p for p in predictions if p['supplier'] == supplier]
+                pred_df = pd.DataFrame(predictions)
+                pred_df.to_excel(writer, sheet_name='Prédictions', index=False)
+            
+            # Sheet 5: Recommended Actions
+            if include_actions:
+                actions = calculate_case_specific_actions(risques, workspace.data_type)
+                if supplier:
+                    actions = [a for a in actions if a['supplier'] == supplier]
+                actions_df = pd.DataFrame(actions)
+                actions_df.to_excel(writer, sheet_name='Actions Recommandées', index=False)
+        
+        output.seek(0)
+        
+        # Generate filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"workspace_{workspace.name}_{timestamp}"
+        if supplier:
+            filename += f"_{supplier}"
+        filename += ".xlsx"
+        
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erreur d'export: {str(e)}")
+
+
+@router.get("/{workspace_id}/export/csv")
+async def export_to_csv(
+    workspace_id: uuid.UUID,
+    data_type: str = Query("all", description="all, kpis, risks, predictions, actions"),
+    supplier: Optional[str] = Query(None, description="Filter by supplier"),
+    db: Session = Depends(get_db)
+):
+    """
+    Export workspace data to CSV format.
+    Choose what to export: raw data, KPIs, risks, predictions, or actions.
+    """
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    df = get_workspace_dataframe(workspace_id, db)
+    if df is None or df.empty:
+        raise HTTPException(status_code=400, detail="Aucune donnée disponible")
+    
+    try:
+        # Filter by supplier if specified
+        if supplier:
+            df = df[df['supplier'] == supplier]
+            if df.empty:
+                raise HTTPException(status_code=404, detail=f"Fournisseur '{supplier}' non trouvé")
+        
+        output = io.StringIO()
+        
+        if data_type == "all" or data_type == "data":
+            df.to_csv(output, index=False)
+        elif data_type == "kpis":
+            kpis = calculate_case_specific_kpis(df, workspace.data_type)
+            kpi_df = pd.DataFrame([{"KPI": k, "Valeur": v} for k, v in kpis.items()])
+            kpi_df.to_csv(output, index=False)
+        elif data_type == "risks":
+            risques = calculate_case_specific_supplier_risks(df, workspace.data_type)
+            if supplier:
+                risques = [r for r in risques if r['supplier'] == supplier]
+            pd.DataFrame(risques).to_csv(output, index=False)
+        elif data_type == "predictions":
+            predictions = calculate_case_specific_predictions(df, workspace.data_type)
+            if supplier:
+                predictions = [p for p in predictions if p['supplier'] == supplier]
+            pd.DataFrame(predictions).to_csv(output, index=False)
+        elif data_type == "actions":
+            risques = calculate_case_specific_supplier_risks(df, workspace.data_type)
+            actions = calculate_case_specific_actions(risques, workspace.data_type)
+            if supplier:
+                actions = [a for a in actions if a['supplier'] == supplier]
+            pd.DataFrame(actions).to_csv(output, index=False)
+        else:
+            raise HTTPException(status_code=400, detail="Type d'export invalide")
+        
+        output.seek(0)
+        
+        # Generate filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"workspace_{workspace.name}_{data_type}_{timestamp}"
+        if supplier:
+            filename += f"_{supplier}"
+        filename += ".csv"
+        
+        return StreamingResponse(
+            io.BytesIO(output.getvalue().encode('utf-8')),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur d'export: {str(e)}")
+
+
+@router.get("/{workspace_id}/export/report")
+async def export_report_summary(
+    workspace_id: uuid.UUID,
+    supplier: Optional[str] = Query(None, description="Filter by supplier"),
+    db: Session = Depends(get_db)
+):
+    """
+    Export a summary report in JSON format.
+    Can be used to generate PDF reports on the frontend.
+    """
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    df = get_workspace_dataframe(workspace_id, db)
+    if df is None or df.empty:
+        raise HTTPException(status_code=400, detail="Aucune donnée disponible")
+    
+    try:
+        # Filter by supplier if specified
+        if supplier:
+            df_filtered = df[df['supplier'] == supplier]
+            if df_filtered.empty:
+                raise HTTPException(status_code=404, detail=f"Fournisseur '{supplier}' non trouvé")
+        else:
+            df_filtered = df
+        
+        # Calculate all data
+        kpis = calculate_case_specific_kpis(df_filtered, workspace.data_type)
+        risques = calculate_case_specific_supplier_risks(df_filtered, workspace.data_type)
+        actions = calculate_case_specific_actions(risques, workspace.data_type)
+        predictions = calculate_case_specific_predictions(df_filtered, workspace.data_type)
+        
+        if supplier:
+            risques = [r for r in risques if r['supplier'] == supplier]
+            actions = [a for a in actions if a['supplier'] == supplier]
+            predictions = [p for p in predictions if p['supplier'] == supplier]
+        
+        # Get schema info
+        schema = get_schema_for_case(workspace.data_type)
+        
+        report = {
+            "report_info": {
+                "workspace_name": workspace.name,
+                "workspace_id": str(workspace_id),
+                "generated_at": datetime.now().isoformat(),
+                "filtered_by_supplier": supplier,
+                "case_type": schema.get("case_type"),
+                "case_description": schema.get("description")
+            },
+            "data_summary": {
+                "total_rows": len(df_filtered),
+                "total_suppliers": df_filtered['supplier'].nunique(),
+                "suppliers": df_filtered['supplier'].unique().tolist(),
+                "date_range": {
+                    "start": df_filtered['date_promised'].min().strftime("%Y-%m-%d") if 'date_promised' in df_filtered.columns else None,
+                    "end": df_filtered['date_promised'].max().strftime("%Y-%m-%d") if 'date_promised' in df_filtered.columns else None
+                }
+            },
+            "kpis": kpis,
+            "risk_distribution": {
+                "faible": len([r for r in risques if r.get('niveau_risque') == 'Faible']),
+                "modere": len([r for r in risques if r.get('niveau_risque') == 'Modéré']),
+                "eleve": len([r for r in risques if r.get('niveau_risque') == 'Élevé'])
+            },
+            "supplier_risks": risques,
+            "predictions": predictions,
+            "recommended_actions": {
+                "high_priority": [a for a in actions if a.get('priority') == 'high'],
+                "medium_priority": [a for a in actions if a.get('priority') == 'medium'],
+                "low_priority": [a for a in actions if a.get('priority') == 'low']
+            }
+        }
+        
+        return report
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erreur de génération du rapport: {str(e)}")

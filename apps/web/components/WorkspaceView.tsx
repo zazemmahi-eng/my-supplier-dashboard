@@ -16,8 +16,10 @@ import {
 import {
   Upload, ArrowLeft, Database, Settings, FileText, Download,
   AlertCircle, CheckCircle, TrendingUp, TrendingDown, Activity,
-  BarChart3, PieChart as PieChartIcon, Filter, Plus, X, Trash2
+  BarChart3, PieChart as PieChartIcon, Filter, Plus, X, Trash2,
+  Zap, RefreshCw, FileSpreadsheet, Table
 } from 'lucide-react';
+import LLMColumnMapper from './LLMColumnMapper';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_SUPPLIER_API_URL ?? 'http://127.0.0.1:8000';
 
@@ -180,6 +182,21 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
     unit: '%'
   });
 
+  // LLM Column Mapping state - for intelligent CSV ingestion
+  const [showLLMMapper, setShowLLMMapper] = useState(false);
+  const [llmAnalysis, setLLMAnalysis] = useState<any>(null);
+  const [llmCsvContent, setLLMCsvContent] = useState<string>('');
+  const [llmFilename, setLLMFilename] = useState<string>('');
+  const [applyingMappings, setApplyingMappings] = useState(false);
+
+  // Export state
+  const [exportLoading, setExportLoading] = useState(false);
+  const [showExportOptions, setShowExportOptions] = useState(false);
+
+  // Multi-model comparison data state
+  const [multiModelData, setMultiModelData] = useState<any>(null);
+  const [loadingMultiModel, setLoadingMultiModel] = useState(false);
+
   // ============================================
   // DATA FETCHING
   // ============================================
@@ -249,6 +266,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
   // ACTIONS
   // ============================================
 
+  // Standard file upload (original method)
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -285,6 +303,194 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
       }
     } finally {
       setUploading(false);
+    }
+  };
+
+  // Smart upload with LLM-based column mapping
+  // Step 1: Analyze the CSV and show mapping suggestions
+  const handleSmartUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.csv')) {
+      setUploadError('Format invalide. Veuillez uploader un fichier CSV.');
+      return;
+    }
+
+    setUploading(true);
+    setUploadError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      // Call the analyze endpoint
+      const response = await axios.post(
+        `${API_BASE_URL}/api/workspaces/${workspaceId}/upload/analyze`, 
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+
+      // Store analysis results and show mapper
+      setLLMAnalysis(response.data.analysis);
+      setLLMCsvContent(response.data.csv_content);
+      setLLMFilename(response.data.filename || file.name);
+      setShowLLMMapper(true);
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const detail = err.response?.data?.detail;
+        setUploadError(typeof detail === 'string' ? detail : 'Erreur lors de l\'analyse');
+      } else {
+        setUploadError('Erreur inconnue');
+      }
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // Step 2: Apply user-approved mappings and import data
+  const handleApplyMappings = async (mappings: any[], targetCase: string) => {
+    setApplyingMappings(true);
+    setUploadError(null);
+
+    try {
+      // Build query parameters
+      const params = new URLSearchParams({
+        csv_content: llmCsvContent,
+        mappings: JSON.stringify(mappings),
+        target_case: targetCase,
+        filename: llmFilename
+      });
+
+      const response = await axios.post(
+        `${API_BASE_URL}/api/workspaces/${workspaceId}/upload/apply-mappings?${params.toString()}`
+      );
+
+      if (response.data.success) {
+        // Close mapper and refresh
+        setShowLLMMapper(false);
+        setLLMAnalysis(null);
+        await fetchWorkspaceInfo();
+        await fetchDashboardData();
+        
+        // Show success message with transformations
+        if (response.data.warnings?.length > 0) {
+          alert(`Import réussi avec avertissements:\n${response.data.warnings.join('\n')}`);
+        }
+      } else {
+        setUploadError(response.data.errors?.join('\n') || 'Erreur de normalisation');
+      }
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const detail = err.response?.data?.detail;
+        setUploadError(typeof detail === 'string' ? detail : 'Erreur lors de l\'import');
+      } else {
+        setUploadError('Erreur inconnue');
+      }
+    } finally {
+      setApplyingMappings(false);
+    }
+  };
+
+  // Fetch multi-model comparison data
+  const fetchMultiModelData = async () => {
+    setLoadingMultiModel(true);
+    try {
+      const supplierParam = selectedSupplier !== 'all' ? `&supplier=${encodeURIComponent(selectedSupplier)}` : '';
+      const response = await axios.get(
+        `${API_BASE_URL}/api/workspaces/${workspaceId}/analysis/multi-model?models=all${supplierParam}`
+      );
+      setMultiModelData(response.data);
+    } catch (err) {
+      console.error('Error fetching multi-model data:', err);
+    } finally {
+      setLoadingMultiModel(false);
+    }
+  };
+
+  // Export handlers
+  const handleExportExcel = async (includeAll: boolean = true) => {
+    setExportLoading(true);
+    try {
+      const supplierParam = selectedSupplier !== 'all' ? `&supplier=${encodeURIComponent(selectedSupplier)}` : '';
+      const response = await axios.get(
+        `${API_BASE_URL}/api/workspaces/${workspaceId}/export/excel?include_dashboard=${includeAll}&include_predictions=${includeAll}&include_actions=${includeAll}${supplierParam}`,
+        { responseType: 'blob' }
+      );
+
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const supplierSuffix = selectedSupplier !== 'all' ? `_${selectedSupplier}` : '';
+      link.setAttribute('download', `workspace_${workspaceName}${supplierSuffix}_${timestamp}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Excel export error:', err);
+      alert('Erreur lors de l\'export Excel');
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  const handleExportCSV = async (dataType: string) => {
+    setExportLoading(true);
+    try {
+      const supplierParam = selectedSupplier !== 'all' ? `&supplier=${encodeURIComponent(selectedSupplier)}` : '';
+      const response = await axios.get(
+        `${API_BASE_URL}/api/workspaces/${workspaceId}/export/csv?data_type=${dataType}${supplierParam}`,
+        { responseType: 'blob' }
+      );
+
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const supplierSuffix = selectedSupplier !== 'all' ? `_${selectedSupplier}` : '';
+      link.setAttribute('download', `${dataType}_${workspaceName}${supplierSuffix}_${timestamp}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('CSV export error:', err);
+      alert('Erreur lors de l\'export CSV');
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  const handleExportReport = async () => {
+    setExportLoading(true);
+    try {
+      const supplierParam = selectedSupplier !== 'all' ? `?supplier=${encodeURIComponent(selectedSupplier)}` : '';
+      const response = await axios.get(
+        `${API_BASE_URL}/api/workspaces/${workspaceId}/export/report${supplierParam}`
+      );
+
+      // Download as JSON
+      const dataStr = JSON.stringify(response.data, null, 2);
+      const blob = new Blob([dataStr], { type: 'application/json' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const supplierSuffix = selectedSupplier !== 'all' ? `_${selectedSupplier}` : '';
+      link.setAttribute('download', `report_${workspaceName}${supplierSuffix}_${timestamp}.json`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Report export error:', err);
+      alert('Erreur lors de l\'export du rapport');
+    } finally {
+      setExportLoading(false);
     }
   };
 
@@ -786,30 +992,67 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
             {/* Upload New Dataset */}
             <div className="bg-white rounded-xl p-6 shadow">
               <h3 className="font-semibold text-gray-900 mb-4">Uploader un nouveau dataset</h3>
-              <div className="relative">
-                <input
-                  type="file"
-                  accept=".csv"
-                  onChange={handleFileUpload}
-                  disabled={uploading}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                />
-                <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${
-                  uploading ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-blue-400'
-                }`}>
-                  {uploading ? (
-                    <div className="flex items-center justify-center gap-3">
-                      <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
-                      <span className="text-blue-600">Traitement en cours...</span>
+              
+              {/* Two upload options */}
+              <div className="grid md:grid-cols-2 gap-4 mb-4">
+                {/* Standard Upload */}
+                <div className="relative">
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleFileUpload}
+                    disabled={uploading}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                  />
+                  <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors h-full ${
+                    uploading ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-blue-400'
+                  }`}>
+                    {uploading ? (
+                      <div className="flex flex-col items-center justify-center gap-3">
+                        <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                        <span className="text-blue-600">Traitement en cours...</span>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center gap-3">
+                        <Upload className="h-8 w-8 text-gray-400" />
+                        <span className="text-gray-700 font-medium">Upload Standard</span>
+                        <span className="text-gray-500 text-sm">Format attendu uniquement</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Smart Upload with LLM Mapping */}
+                <div className="relative">
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleSmartUpload}
+                    disabled={uploading}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                  />
+                  <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors h-full ${
+                    uploading ? 'border-yellow-500 bg-yellow-50' : 'border-yellow-300 hover:border-yellow-500 bg-gradient-to-br from-yellow-50 to-orange-50'
+                  }`}>
+                    <div className="flex flex-col items-center justify-center gap-3">
+                      <Zap className="h-8 w-8 text-yellow-500" />
+                      <span className="text-gray-700 font-medium">Upload Intelligent</span>
+                      <span className="text-gray-500 text-sm">L'IA suggère les mappings</span>
                     </div>
-                  ) : (
-                    <div className="flex items-center justify-center gap-3">
-                      <Upload className="h-6 w-6 text-gray-400" />
-                      <span className="text-gray-600">Cliquez ou glissez-déposez un fichier CSV</span>
-                    </div>
-                  )}
+                  </div>
                 </div>
               </div>
+
+              {/* Schema hint */}
+              {workspaceInfo?.schema && (
+                <div className="mt-4 p-3 bg-gray-50 rounded-lg text-sm">
+                  <p className="text-gray-600">
+                    <strong>Format attendu:</strong>{' '}
+                    {workspaceInfo.schema.required?.join(', ')}
+                  </p>
+                </div>
+              )}
+
               {uploadError && (
                 <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
                   <div className="flex items-start gap-3">
@@ -2055,46 +2298,177 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
 
         {/* Export Tab */}
         {activeTab === 'export' && (
-          <div className="bg-white rounded-xl p-8 shadow">
-            <h3 className="font-semibold text-gray-900 mb-6">Exporter le Rapport</h3>
-            
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Filtrer par fournisseur
-              </label>
-              <select
-                value={selectedSupplier}
-                onChange={(e) => setSelectedSupplier(e.target.value)}
-                className="w-full max-w-xs px-4 py-2 rounded-lg border border-gray-300"
-              >
-                <option value="all">Tous les fournisseurs</option>
-                {workspaceInfo?.dataset?.suppliers?.map(s => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
+          <div className="space-y-6">
+            {/* Export Options */}
+            <div className="bg-white rounded-xl p-6 shadow">
+              <h3 className="font-semibold text-gray-900 mb-6 flex items-center gap-2">
+                <Download className="h-5 w-5 text-blue-600" />
+                Exporter les Données
+              </h3>
+              
+              {/* Supplier Filter */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Filtrer par fournisseur
+                </label>
+                <select
+                  value={selectedSupplier}
+                  onChange={(e) => setSelectedSupplier(e.target.value)}
+                  className="w-full max-w-xs px-4 py-2 rounded-lg border border-gray-300"
+                >
+                  <option value="all">Tous les fournisseurs</option>
+                  {workspaceInfo?.dataset?.suppliers?.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Export Buttons Grid */}
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {/* Excel Export (Complete) */}
+                <div className="border rounded-lg p-4 hover:border-green-500 transition-colors">
+                  <div className="flex items-center gap-3 mb-3">
+                    <FileSpreadsheet className="h-8 w-8 text-green-600" />
+                    <div>
+                      <h4 className="font-medium text-gray-900">Excel Complet</h4>
+                      <p className="text-xs text-gray-500">Toutes les données en un fichier</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleExportExcel(true)}
+                    disabled={exportLoading}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium disabled:opacity-50"
+                  >
+                    {exportLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    Télécharger .xlsx
+                  </button>
+                </div>
+
+                {/* CSV - Raw Data */}
+                <div className="border rounded-lg p-4 hover:border-blue-500 transition-colors">
+                  <div className="flex items-center gap-3 mb-3">
+                    <Table className="h-8 w-8 text-blue-600" />
+                    <div>
+                      <h4 className="font-medium text-gray-900">Données Brutes</h4>
+                      <p className="text-xs text-gray-500">CSV des données sources</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleExportCSV('all')}
+                    disabled={exportLoading}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium disabled:opacity-50"
+                  >
+                    {exportLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    Télécharger .csv
+                  </button>
+                </div>
+
+                {/* CSV - KPIs */}
+                <div className="border rounded-lg p-4 hover:border-purple-500 transition-colors">
+                  <div className="flex items-center gap-3 mb-3">
+                    <Activity className="h-8 w-8 text-purple-600" />
+                    <div>
+                      <h4 className="font-medium text-gray-900">KPIs</h4>
+                      <p className="text-xs text-gray-500">Indicateurs calculés</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleExportCSV('kpis')}
+                    disabled={exportLoading}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium disabled:opacity-50"
+                  >
+                    {exportLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    Télécharger .csv
+                  </button>
+                </div>
+
+                {/* CSV - Risks */}
+                <div className="border rounded-lg p-4 hover:border-orange-500 transition-colors">
+                  <div className="flex items-center gap-3 mb-3">
+                    <AlertCircle className="h-8 w-8 text-orange-600" />
+                    <div>
+                      <h4 className="font-medium text-gray-900">Risques Fournisseurs</h4>
+                      <p className="text-xs text-gray-500">Scores et niveaux de risque</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleExportCSV('risks')}
+                    disabled={exportLoading}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-medium disabled:opacity-50"
+                  >
+                    {exportLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    Télécharger .csv
+                  </button>
+                </div>
+
+                {/* CSV - Predictions */}
+                <div className="border rounded-lg p-4 hover:border-teal-500 transition-colors">
+                  <div className="flex items-center gap-3 mb-3">
+                    <TrendingUp className="h-8 w-8 text-teal-600" />
+                    <div>
+                      <h4 className="font-medium text-gray-900">Prédictions</h4>
+                      <p className="text-xs text-gray-500">Prévisions par fournisseur</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleExportCSV('predictions')}
+                    disabled={exportLoading}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium disabled:opacity-50"
+                  >
+                    {exportLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    Télécharger .csv
+                  </button>
+                </div>
+
+                {/* CSV - Actions */}
+                <div className="border rounded-lg p-4 hover:border-red-500 transition-colors">
+                  <div className="flex items-center gap-3 mb-3">
+                    <CheckCircle className="h-8 w-8 text-red-600" />
+                    <div>
+                      <h4 className="font-medium text-gray-900">Actions Recommandées</h4>
+                      <p className="text-xs text-gray-500">Plan d'action prioritaire</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleExportCSV('actions')}
+                    disabled={exportLoading}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium disabled:opacity-50"
+                  >
+                    {exportLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    Télécharger .csv
+                  </button>
+                </div>
+              </div>
             </div>
 
-            <div className="flex gap-4">
-              <button
-                onClick={() => handleExport('excel')}
-                className="flex items-center gap-2 px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium"
-              >
-                <FileText className="h-5 w-5" />
-                Exporter Excel
-              </button>
-              <button
-                onClick={() => handleExport('pdf')}
-                className="flex items-center gap-2 px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium"
-              >
-                <Download className="h-5 w-5" />
-                Exporter PDF
-              </button>
+            {/* Report Summary Export */}
+            <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-xl p-6 shadow text-white">
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div>
+                  <h3 className="font-semibold text-lg mb-1">Rapport Structuré (JSON)</h3>
+                  <p className="text-indigo-100 text-sm">
+                    Export complet avec métadonnées pour intégration système ou génération PDF
+                  </p>
+                </div>
+                <button
+                  onClick={handleExportReport}
+                  disabled={exportLoading}
+                  className="flex items-center gap-2 px-6 py-3 bg-white text-indigo-600 hover:bg-indigo-50 rounded-lg font-medium disabled:opacity-50"
+                >
+                  {exportLoading ? <RefreshCw className="h-5 w-5 animate-spin" /> : <FileText className="h-5 w-5" />}
+                  Générer Rapport
+                </button>
+              </div>
             </div>
 
-            <div className="mt-6 p-4 bg-blue-50 rounded-lg">
+            <div className="p-4 bg-blue-50 rounded-lg">
               <p className="text-sm text-blue-800">
-                <strong>Note:</strong> Le rapport inclura les KPIs, l'analyse des fournisseurs, 
-                les prédictions et les actions recommandées.
+                <strong>💡 Astuce:</strong> Utilisez le filtre fournisseur pour exporter uniquement les données d'un fournisseur spécifique.
+                {selectedSupplier !== 'all' && (
+                  <span className="block mt-1">
+                    Filtrage actif: <strong>{selectedSupplier}</strong>
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -2174,6 +2548,25 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                   Créer
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* LLM Column Mapper Modal */}
+        {showLLMMapper && llmAnalysis && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 overflow-y-auto">
+            <div className="my-8">
+              <LLMColumnMapper
+                analysis={llmAnalysis}
+                originalColumns={llmAnalysis.column_analysis?.map((c: any) => c.column) || []}
+                onApply={handleApplyMappings}
+                onCancel={() => {
+                  setShowLLMMapper(false);
+                  setLLMAnalysis(null);
+                  setUploadError(null);
+                }}
+                loading={applyingMappings}
+              />
             </div>
           </div>
         )}
