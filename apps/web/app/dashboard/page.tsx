@@ -8,7 +8,8 @@ import {
 import {
   TrendingUp, TrendingDown, AlertTriangle, Clock, CheckCircle,
   Package, Activity, Plus, X, Mail, Phone, MapPin, FileText, Star,
-  BarChart3, PieChart as PieChartIcon, LineChart as LineChartIcon, Upload, RotateCcw
+  BarChart3, PieChart as PieChartIcon, LineChart as LineChartIcon, Upload, RotateCcw,
+  ChevronRight, Download, FileBarChart, XCircle
 } from 'lucide-react';
 import DataUploadLanding from '~/components/DataUploadLanding';
 
@@ -92,6 +93,7 @@ export default function SupplierDashboardPage() {
   const [newSupplier, setNewSupplier] = useState(CreateSupplierPayload);
   const [dataLoaded, setDataLoaded] = useState<boolean | null>(null);
   const [dataSource, setDataSource] = useState<string>('database');
+  const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
 
   useEffect(() => {
     checkDataStatus();
@@ -224,6 +226,16 @@ export default function SupplierDashboardPage() {
     if (tendance === 'hausse') return <TrendingUp className="h-4 w-4 text-red-500" />;
     if (tendance === 'baisse') return <TrendingDown className="h-4 w-4 text-green-500" />;
     return <span className="text-gray-400">→</span>;
+  };
+
+  // Get prediction for a specific supplier
+  const getSupplierPrediction = (supplierName: string) => {
+    return predictions.find(p => p.supplier === supplierName);
+  };
+
+  // Get actions for a specific supplier
+  const getSupplierActions = (supplierName: string) => {
+    return actions.filter(a => a.supplier === supplierName);
   };
 
   // ============== LOADING / ERROR ==============
@@ -363,7 +375,11 @@ export default function SupplierDashboardPage() {
               <h2 className="mb-4 text-2xl font-bold text-gray-900">🏭 Fournisseurs</h2>
               <div className="space-y-4">
                 {suppliers.map((supplier) => (
-                  <div key={supplier.supplier} className={`rounded-xl border-2 p-5 shadow-md ${getStatusColor(supplier.status)}`}>
+                  <div
+                    key={supplier.supplier}
+                    onClick={() => setSelectedSupplier(supplier)}
+                    className={`rounded-xl border-2 p-5 shadow-md cursor-pointer transition-all duration-200 hover:shadow-lg hover:scale-[1.01] ${getStatusColor(supplier.status)} ${selectedSupplier?.supplier === supplier.supplier ? 'ring-4 ring-blue-500 ring-offset-2' : ''}`}
+                  >
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-3">
@@ -391,10 +407,13 @@ export default function SupplierDashboardPage() {
                           </div>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm text-gray-600">Score</p>
-                        <p className="text-3xl font-bold">{supplier.score_risque}</p>
-                        <p className="text-xs text-gray-500">{supplier.nb_commandes} cmd</p>
+                      <div className="flex items-center gap-4">
+                        <div className="text-right">
+                          <p className="text-sm text-gray-600">Score</p>
+                          <p className="text-3xl font-bold">{supplier.score_risque}</p>
+                          <p className="text-xs text-gray-500">{supplier.nb_commandes} cmd</p>
+                        </div>
+                        <ChevronRight className="h-6 w-6 text-gray-400" />
                       </div>
                     </div>
                   </div>
@@ -793,6 +812,158 @@ export default function SupplierDashboardPage() {
           </div>
         </div>
       )}
+
+      {/* ========== SUPPLIER DETAIL PANEL ========== */}
+      {selectedSupplier && (
+        <div className="fixed inset-0 z-40 flex justify-end" onClick={() => setSelectedSupplier(null)}>
+          <div className="absolute inset-0 bg-black bg-opacity-30 transition-opacity" />
+          <div
+            className="relative w-full max-w-lg bg-white shadow-2xl overflow-y-auto transform transition-transform duration-300 ease-out"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Panel Header */}
+            <div className={`sticky top-0 z-10 p-6 border-b-2 ${getStatusColor(selectedSupplier.status)}`}>
+              <div className="flex items-start justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">{selectedSupplier.supplier}</h2>
+                  <span className={`inline-block mt-2 rounded-full px-4 py-1 text-sm font-semibold ${selectedSupplier.status === 'good' ? 'bg-green-500 text-white' :
+                    selectedSupplier.status === 'warning' ? 'bg-yellow-500 text-white' : 'bg-red-500 text-white'
+                    }`}>
+                    Risque {selectedSupplier.niveau_risque}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setSelectedSupplier(null)}
+                  className="rounded-full p-2 hover:bg-gray-200 transition-colors"
+                >
+                  <XCircle className="h-7 w-7 text-gray-500" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Performance Metrics */}
+              <div className="rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 p-5">
+                <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                  <BarChart3 className="h-5 w-5 text-blue-600" /> Métriques de Performance
+                </h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-white rounded-lg p-4 shadow-sm">
+                    <p className="text-sm text-gray-600">Score de Risque</p>
+                    <div className="flex items-end gap-2">
+                      <span className="text-4xl font-bold text-blue-600">{selectedSupplier.score_risque}</span>
+                      <span className="text-gray-500 mb-1">/100</span>
+                    </div>
+                    <div className="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${selectedSupplier.status === 'good' ? 'bg-green-500' : selectedSupplier.status === 'warning' ? 'bg-yellow-500' : 'bg-red-500'}`}
+                        style={{ width: `${selectedSupplier.score_risque}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-lg p-4 shadow-sm">
+                    <p className="text-sm text-gray-600">Commandes</p>
+                    <span className="text-4xl font-bold text-purple-600">{selectedSupplier.nb_commandes}</span>
+                  </div>
+                  <div className="bg-white rounded-lg p-4 shadow-sm">
+                    <p className="text-sm text-gray-600">Taux de Défauts</p>
+                    <div className="flex items-center gap-2">
+                      <span className="text-3xl font-bold text-orange-600">{selectedSupplier.taux_defaut}%</span>
+                      {getTrendIcon(selectedSupplier.tendance_defauts)}
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-lg p-4 shadow-sm">
+                    <p className="text-sm text-gray-600">Retard Moyen</p>
+                    <div className="flex items-center gap-2">
+                      <span className="text-3xl font-bold text-blue-600">{selectedSupplier.retard_moyen}j</span>
+                      {getTrendIcon(selectedSupplier.tendance_retards)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Predictions Section */}
+              {(() => {
+                const prediction = getSupplierPrediction(selectedSupplier.supplier);
+                if (!prediction) return null;
+                return (
+                  <div className="rounded-xl bg-gradient-to-br from-purple-50 to-pink-50 p-5">
+                    <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                      <Activity className="h-5 w-5 text-purple-600" /> Prédictions
+                    </h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-white rounded-lg p-4 shadow-sm">
+                        <p className="text-sm text-gray-600">Défauts Prévus</p>
+                        <span className="text-3xl font-bold text-orange-600">{prediction.predicted_defect}%</span>
+                      </div>
+                      <div className="bg-white rounded-lg p-4 shadow-sm">
+                        <p className="text-sm text-gray-600">Retard Prévu</p>
+                        <span className="text-3xl font-bold text-blue-600">{prediction.predicted_delay}j</span>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-center">
+                      <span className={`px-3 py-1 rounded-full text-sm font-semibold ${prediction.confiance === 'haute' ? 'bg-green-100 text-green-700' :
+                        prediction.confiance === 'moyenne' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'
+                        }`}>
+                        Confiance: {prediction.confiance}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Supplier Actions */}
+              {(() => {
+                const supplierActions = getSupplierActions(selectedSupplier.supplier);
+                if (supplierActions.length === 0) return null;
+                return (
+                  <div className="rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 p-5">
+                    <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                      <AlertTriangle className="h-5 w-5 text-amber-600" /> Actions Correctives
+                    </h3>
+                    <div className="space-y-3">
+                      {supplierActions.map((action, idx) => (
+                        <div key={idx} className="bg-white rounded-lg p-4 shadow-sm">
+                          <div className="flex items-start gap-3">
+                            <span className={`rounded-full px-2 py-1 text-xs font-bold ${getPriorityColor(action.priority)}`}>
+                              {action.priority.toUpperCase()}
+                            </span>
+                            <div className="flex-1">
+                              <p className="font-semibold text-gray-900">{action.action}</p>
+                              <p className="text-sm text-gray-600 mt-1">{action.raison}</p>
+                              <p className="text-xs text-gray-500 mt-2">⏱️ {action.delai} • 📊 {action.impact}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Action Buttons */}
+              <div className="sticky bottom-0 bg-white pt-4 pb-2 border-t">
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => alert(`📊 Génération du rapport pour ${selectedSupplier.supplier}...`)}
+                    className="flex-1 flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors shadow-lg"
+                  >
+                    <FileBarChart className="h-5 w-5" /> Générer Rapport
+                  </button>
+                  <button
+                    onClick={() => alert(`📤 Export des données de ${selectedSupplier.supplier}...`)}
+                    className="flex items-center justify-center gap-2 bg-gray-100 text-gray-700 px-4 py-3 rounded-lg font-semibold hover:bg-gray-200 transition-colors"
+                  >
+                    <Download className="h-5 w-5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+
     </div>
   );
 }

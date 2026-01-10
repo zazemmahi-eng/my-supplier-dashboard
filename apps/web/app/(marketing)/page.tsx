@@ -1,10 +1,10 @@
 import Image from 'next/image';
 import Link from 'next/link';
 
-import { 
-  ArrowRightIcon, 
-  LayoutDashboard, 
-  TrendingUp, 
+import {
+  ArrowRightIcon,
+  LayoutDashboard,
+  TrendingUp,
   AlertTriangle,
   CheckCircle,
   Clock
@@ -35,18 +35,6 @@ function SupplierPredictiveDashboard() {
           <Link href="/dashboard" className="block p-2 rounded hover:bg-gray-700 bg-gray-800">
             📊 Vue d'ensemble
           </Link>
-          <Link href="/delivery-risks" className="block p-2 rounded hover:bg-gray-700">
-            🚚 Risques de retard
-          </Link>
-          <Link href="/quality-defects" className="block p-2 rounded hover:bg-gray-700">
-            ⚠️ Taux de défauts
-          </Link>
-          <Link href="/corrective-actions" className="block p-2 rounded hover:bg-gray-700">
-            ✅ Actions correctives
-          </Link>
-          <Link href="/suppliers" className="block p-2 rounded hover:bg-gray-700">
-            🏭 Fournisseurs
-          </Link>
         </nav>
       </aside>
 
@@ -68,8 +56,8 @@ function SupplierPredictiveDashboard() {
               }
               subtitle={
                 <span>
-                  Surveillez en temps réel vos fournisseurs, identifiez les dérives 
-                  de processus et anticipez les problèmes de qualité et de livraison 
+                  Surveillez en temps réel vos fournisseurs, identifiez les dérives
+                  de processus et anticipez les problèmes de qualité et de livraison
                   grâce à des prédictions simples et efficaces.
                 </span>
               }
@@ -97,7 +85,7 @@ function SupplierPredictiveDashboard() {
                     </b>
                     .{' '}
                     <span className="text-muted-foreground font-normal">
-                      Un tableau de bord clair et actionnable pour piloter 
+                      Un tableau de bord clair et actionnable pour piloter
                       efficacement votre chaîne d'approvisionnement et votre qualité.
                     </span>
                   </>
@@ -156,20 +144,20 @@ function SupplierPredictiveDashboard() {
                       Fournisseur A : Dérive de processus
                     </h3>
                     <p className="text-gray-700">
-                      Augmentation progressive du taux de défauts détectée sur 3 semaines. 
-                      Le système recommande une recalibration des équipements et une formation 
+                      Augmentation progressive du taux de défauts détectée sur 3 semaines.
+                      Le système recommande une recalibration des équipements et une formation
                       des opérateurs avant que la situation ne devienne critique.
                     </p>
                   </div>
-                  
+
                   <div className="rounded-lg border-2 border-red-200 bg-red-50 p-6">
                     <h3 className="mb-3 flex items-center text-xl font-semibold text-red-900">
                       <Clock className="mr-2 h-6 w-6" />
                       Fournisseur B : Retards récurrents
                     </h3>
                     <p className="text-gray-700">
-                      Retards de livraison identifiés au milieu de la période d'analyse. 
-                      Alerte précoce permettant de planifier des commandes anticipées et 
+                      Retards de livraison identifiés au milieu de la période d'analyse.
+                      Alerte précoce permettant de planifier des commandes anticipées et
                       d'engager un dialogue avec le fournisseur.
                     </p>
                   </div>
