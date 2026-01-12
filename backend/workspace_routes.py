@@ -323,16 +323,20 @@ def get_workspace_dataframe(workspace_id: uuid.UUID, db: Session) -> Optional[pd
 @router.get("", response_model=List[WorkspaceResponse])
 async def list_workspaces(
     status: Optional[WorkspaceStatus] = None,
+    user_id: Optional[str] = Query(None, description="Filter by user ID"),
     db: Session = Depends(get_db)
 ):
     """
     List all workspaces with their basic info.
-    Optionally filter by status.
+    Optionally filter by status and/or user_id.
     """
     query = db.query(Workspace)
     
     if status:
         query = query.filter(Workspace.status == status)
+    
+    if user_id:
+        query = query.filter(Workspace.owner_id == user_id)
     
     workspaces = query.order_by(Workspace.created_at.desc()).all()
     
@@ -358,6 +362,137 @@ async def list_workspaces(
         ))
     
     return result
+
+
+# ============================================
+# GLOBAL DASHBOARD AGGREGATION ENDPOINT
+# ============================================
+
+@router.get("/global/dashboard", response_model=Dict[str, Any])
+async def get_global_dashboard(
+    user_id: Optional[str] = Query(None, description="Filter by user ID"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get aggregated dashboard data across ALL user workspaces.
+    Returns high-level KPIs, workspace summaries, and global trends.
+    This is a READ-ONLY overview - no data upload here.
+    """
+    # Get all workspaces (optionally filtered by user)
+    query = db.query(Workspace).filter(Workspace.status == WorkspaceStatus.ACTIVE)
+    if user_id:
+        query = query.filter(Workspace.owner_id == user_id)
+    
+    workspaces = query.order_by(Workspace.created_at.desc()).all()
+    
+    # Initialize aggregated metrics
+    total_workspaces = len(workspaces)
+    total_suppliers = 0
+    total_orders = 0
+    workspaces_with_data = 0
+    
+    # Aggregated KPIs
+    total_delay_sum = 0
+    total_defect_sum = 0
+    delay_count = 0
+    defect_count = 0
+    
+    # Workspace summaries
+    workspace_summaries = []
+    
+    # Risk distribution across all workspaces
+    risk_distribution = {"faible": 0, "modere": 0, "eleve": 0}
+    
+    # Process each workspace
+    for ws in workspaces:
+        active_dataset = db.query(WorkspaceDataset).filter(
+            WorkspaceDataset.workspace_id == ws.id,
+            WorkspaceDataset.is_active == True
+        ).first()
+        
+        supplier_count = len(active_dataset.suppliers) if active_dataset else 0
+        row_count = active_dataset.row_count if active_dataset else 0
+        has_data = active_dataset is not None
+        
+        if has_data:
+            workspaces_with_data += 1
+            total_suppliers += supplier_count
+            total_orders += row_count
+            
+            # Get workspace dataframe for aggregation
+            df = get_workspace_dataframe(ws.id, db)
+            if df is not None and not df.empty:
+                # Aggregate delays (if applicable)
+                if 'delay' in df.columns and ws.data_type in [DataTypeCase.CASE_A, DataTypeCase.CASE_C]:
+                    total_delay_sum += df['delay'].sum()
+                    delay_count += len(df)
+                
+                # Aggregate defects (if applicable)
+                if 'defects' in df.columns and ws.data_type in [DataTypeCase.CASE_B, DataTypeCase.CASE_C]:
+                    total_defect_sum += df['defects'].sum()
+                    defect_count += len(df)
+                
+                # Calculate risk distribution for this workspace
+                try:
+                    risques = calculer_risques_fournisseurs(df)
+                    for r in risques:
+                        niveau = r.get('niveau_risque', '').lower()
+                        if 'faible' in niveau:
+                            risk_distribution["faible"] += 1
+                        elif 'modéré' in niveau or 'modere' in niveau:
+                            risk_distribution["modere"] += 1
+                        elif 'élevé' in niveau or 'eleve' in niveau:
+                            risk_distribution["eleve"] += 1
+                except:
+                    pass
+        
+        # Case label mapping
+        case_labels = {
+            "delays": "Case A - Retards",
+            "late_days": "Case B - Défauts",
+            "mixed": "Case C - Mixte"
+        }
+        
+        workspace_summaries.append({
+            "id": str(ws.id),
+            "name": ws.name,
+            "description": ws.description,
+            "data_type": ws.data_type.value,
+            "case_label": case_labels.get(ws.data_type.value, ws.data_type.value),
+            "status": ws.status.value,
+            "has_data": has_data,
+            "supplier_count": supplier_count,
+            "row_count": row_count,
+            "created_at": ws.created_at.isoformat(),
+            "updated_at": ws.updated_at.isoformat()
+        })
+    
+    # Calculate global averages
+    avg_delay = (total_delay_sum / delay_count) if delay_count > 0 else 0
+    avg_defect = (total_defect_sum / defect_count) if defect_count > 0 else 0
+    
+    return {
+        "summary": {
+            "total_workspaces": total_workspaces,
+            "workspaces_with_data": workspaces_with_data,
+            "total_suppliers": total_suppliers,
+            "total_orders": total_orders,
+            "unique_suppliers": total_suppliers  # Note: may have duplicates across workspaces
+        },
+        "global_kpis": {
+            "avg_delay": round(avg_delay, 2),
+            "avg_defect": round(avg_defect, 2),
+            "delay_orders_analyzed": delay_count,
+            "defect_orders_analyzed": defect_count
+        },
+        "risk_distribution": risk_distribution,
+        "workspaces": workspace_summaries,
+        "case_breakdown": {
+            "case_a_count": len([ws for ws in workspace_summaries if ws["data_type"] == "delays"]),
+            "case_b_count": len([ws for ws in workspace_summaries if ws["data_type"] == "late_days"]),
+            "case_c_count": len([ws for ws in workspace_summaries if ws["data_type"] == "mixed"])
+        }
+    }
 
 
 @router.post("", response_model=WorkspaceResponse)

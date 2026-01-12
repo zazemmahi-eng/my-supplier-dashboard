@@ -232,15 +232,15 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
   // ============================================
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 p-6">
+    <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
         
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">
-            📁 Mes Workspaces
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+            Mes Workspaces
           </h1>
-          <p className="text-blue-200">
+          <p className="text-gray-600">
             Gérez vos espaces de travail pour l'analyse des fournisseurs
           </p>
         </div>
@@ -255,7 +255,7 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
               placeholder="Rechercher un workspace..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-white border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
 
@@ -263,7 +263,7 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-4 py-2.5 rounded-lg bg-white/10 border border-white/20 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="px-4 py-2.5 rounded-lg bg-white border border-gray-200 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="all">Tous les statuts</option>
             <option value="active">Actifs</option>
@@ -273,7 +273,7 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
           {/* Create Button */}
           <button
             onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 px-6 py-2.5 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition-colors"
+            className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-lg transition-all shadow-md"
           >
             <Plus className="h-5 w-5" />
             Nouveau Workspace
@@ -282,12 +282,12 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
 
         {/* Workspaces Grid */}
         {filteredWorkspaces.length === 0 ? (
-          <div className="text-center py-16 bg-white/5 rounded-2xl border border-white/10">
-            <FolderOpen className="mx-auto h-16 w-16 text-gray-400 mb-4" />
-            <h3 className="text-xl font-semibold text-white mb-2">
+          <div className="text-center py-16 bg-white rounded-2xl border border-gray-100 shadow-sm">
+            <FolderOpen className="mx-auto h-16 w-16 text-gray-300 mb-4" />
+            <h3 className="text-xl font-semibold text-gray-900 mb-2">
               {workspaces.length === 0 ? 'Aucun workspace' : 'Aucun résultat'}
             </h3>
-            <p className="text-gray-400 mb-6">
+            <p className="text-gray-500 mb-6">
               {workspaces.length === 0 
                 ? 'Créez votre premier workspace pour commencer l\'analyse'
                 : 'Modifiez vos critères de recherche'
@@ -296,7 +296,7 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
             {workspaces.length === 0 && (
               <button
                 onClick={() => setShowCreateModal(true)}
-                className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg"
+                className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-lg shadow-md"
               >
                 <Plus className="h-5 w-5" />
                 Créer mon premier workspace
@@ -308,13 +308,13 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
             {filteredWorkspaces.map((workspace) => (
               <div
                 key={workspace.id}
-                className="bg-white/10 backdrop-blur-sm rounded-2xl border border-white/20 overflow-hidden hover:border-blue-400/50 transition-all group"
+                className="bg-white rounded-xl border border-gray-100 overflow-hidden hover:shadow-lg hover:border-blue-200 transition-all group shadow-sm"
               >
                 {/* Card Header */}
-                <div className="p-6 border-b border-white/10">
+                <div className="p-6 border-b border-gray-100">
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex-1">
-                      <h3 className="text-lg font-semibold text-white truncate">
+                      <h3 className="text-lg font-semibold text-gray-900 truncate">
                         {workspace.name}
                       </h3>
                       <span className={`inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded ${DATA_TYPE_INFO[workspace.data_type as keyof typeof DATA_TYPE_INFO]?.color || 'bg-gray-100 text-gray-800'}`}>
@@ -326,48 +326,48 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                     </span>
                   </div>
                   {workspace.description && (
-                    <p className="text-sm text-gray-300 line-clamp-2">
+                    <p className="text-sm text-gray-500 line-clamp-2">
                       {workspace.description}
                     </p>
                   )}
                 </div>
 
                 {/* Card Stats */}
-                <div className="p-4 bg-white/5 grid grid-cols-3 gap-4 text-center">
+                <div className="p-4 bg-gray-50 grid grid-cols-3 gap-4 text-center">
                   <div>
                     <div className="flex items-center justify-center gap-1 text-gray-400 mb-1">
                       <Database className="h-4 w-4" />
                     </div>
-                    <p className="text-lg font-semibold text-white">{workspace.row_count}</p>
-                    <p className="text-xs text-gray-400">Lignes</p>
+                    <p className="text-lg font-semibold text-gray-900">{workspace.row_count}</p>
+                    <p className="text-xs text-gray-500">Lignes</p>
                   </div>
                   <div>
                     <div className="flex items-center justify-center gap-1 text-gray-400 mb-1">
                       <FileText className="h-4 w-4" />
                     </div>
-                    <p className="text-lg font-semibold text-white">{workspace.supplier_count}</p>
-                    <p className="text-xs text-gray-400">Fournisseurs</p>
+                    <p className="text-lg font-semibold text-gray-900">{workspace.supplier_count}</p>
+                    <p className="text-xs text-gray-500">Fournisseurs</p>
                   </div>
                   <div>
                     <div className="flex items-center justify-center gap-1 text-gray-400 mb-1">
                       {workspace.has_data ? (
-                        <CheckCircle className="h-4 w-4 text-green-400" />
+                        <CheckCircle className="h-4 w-4 text-green-500" />
                       ) : (
-                        <Clock className="h-4 w-4 text-yellow-400" />
+                        <Clock className="h-4 w-4 text-amber-500" />
                       )}
                     </div>
-                    <p className="text-xs text-gray-400 mt-1">
+                    <p className="text-xs text-gray-500 mt-1">
                       {workspace.has_data ? 'Données OK' : 'À importer'}
                     </p>
                   </div>
                 </div>
 
                 {/* Card Actions */}
-                <div className="p-4 flex items-center justify-between">
+                <div className="p-4 flex items-center justify-between bg-white">
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleDeleteWorkspace(workspace)}
-                      className="p-2 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                      className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                       title="Supprimer"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -378,13 +378,13 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                     onClick={() => onSelectWorkspace(workspace.id, workspace.name)}
                     className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
                   >
-                    {workspace.has_data ? 'Analyser' : 'Importer'}
+                    {workspace.has_data ? 'Analyser' : 'Configurer'}
                     <ChevronRight className="h-4 w-4" />
                   </button>
                 </div>
 
                 {/* Footer */}
-                <div className="px-4 py-2 bg-black/20 text-xs text-gray-400 flex items-center gap-1">
+                <div className="px-4 py-2 bg-gray-50 text-xs text-gray-400 flex items-center gap-1 border-t border-gray-100">
                   <Calendar className="h-3 w-3" />
                   Créé le {formatDate(workspace.created_at)}
                 </div>
@@ -395,15 +395,15 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
 
         {/* Create Workspace Modal */}
         {showCreateModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-            <div className="bg-slate-800 rounded-2xl p-8 w-full max-w-lg mx-4 border border-white/20 shadow-2xl">
-              <h2 className="text-2xl font-bold text-white mb-6">
-                ✨ Nouveau Workspace
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl p-8 w-full max-w-lg mx-4 shadow-2xl">
+              <h2 className="text-2xl font-bold text-gray-900 mb-6">
+                Nouveau Workspace
               </h2>
 
               {/* Name Input */}
               <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
                   Nom du workspace *
                 </label>
                 <input
@@ -411,13 +411,13 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                   value={newWorkspace.name}
                   onChange={(e) => setNewWorkspace({ ...newWorkspace, name: e.target.value })}
                   placeholder="Ex: Analyse Q1 2026"
-                  className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
               </div>
 
               {/* Description Input */}
               <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
                   Description (optionnel)
                 </label>
                 <textarea
@@ -425,14 +425,14 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                   onChange={(e) => setNewWorkspace({ ...newWorkspace, description: e.target.value })}
                   placeholder="Description du workspace..."
                   rows={2}
-                  className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  className="w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
                 />
               </div>
 
               {/* Data Type Selection */}
               <div className="mb-6">
-                <label className="block text-sm font-medium text-gray-300 mb-3">
-                  Type de données *
+                <label className="block text-sm font-medium text-gray-700 mb-3">
+                  Type de données (Case) *
                 </label>
                 <div className="space-y-3">
                   {Object.entries(DATA_TYPE_INFO).map(([key, info]) => (
@@ -440,8 +440,8 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                       key={key}
                       className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-all ${
                         newWorkspace.data_type === key
-                          ? 'border-blue-500 bg-blue-500/20'
-                          : 'border-white/20 bg-white/5 hover:border-white/40'
+                          ? 'border-blue-500 bg-blue-50'
+                          : 'border-gray-200 bg-gray-50 hover:border-gray-300'
                       }`}
                     >
                       <input
@@ -453,9 +453,9 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                         className="mt-1"
                       />
                       <div>
-                        <p className="font-medium text-white">{info.label}</p>
-                        <p className="text-sm text-gray-400">{info.description}</p>
-                        <p className="text-xs text-gray-500 mt-1">
+                        <p className="font-medium text-gray-900">{info.icon} {info.label}</p>
+                        <p className="text-sm text-gray-500">{info.description}</p>
+                        <p className="text-xs text-gray-400 mt-1">
                           Colonnes: {info.columns.join(', ')}
                         </p>
                       </div>
@@ -468,16 +468,16 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
               <div className="flex gap-3">
                 <button
                   onClick={() => setShowCreateModal(false)}
-                  className="flex-1 px-4 py-3 bg-white/10 hover:bg-white/20 text-white font-medium rounded-lg transition-colors"
+                  className="flex-1 px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors"
                 >
                   Annuler
                 </button>
                 <button
                   onClick={handleCreateWorkspace}
                   disabled={creating || !newWorkspace.name.trim()}
-                  className="flex-1 px-4 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-all"
                 >
-                  {creating ? 'Création...' : 'Créer'}
+                  {creating ? 'Création...' : 'Créer le Workspace'}
                 </button>
               </div>
             </div>
