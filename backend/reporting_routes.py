@@ -309,7 +309,7 @@ async def export_pdf(
         elements.append(Spacer(1, 20))
         
         # KPIs Section
-        elements.append(Paragraph("📊 Indicateurs Clés (KPIs)", heading_style))
+        elements.append(Paragraph("Indicateurs Cles (KPIs)", heading_style))
         
         kpis = report_data["kpis"]
         kpi_data = [
@@ -343,7 +343,7 @@ async def export_pdf(
         
         # Suppliers Section
         if report_data["suppliers"]:
-            elements.append(Paragraph("🏢 Analyse des Fournisseurs", heading_style))
+            elements.append(Paragraph("Analyse des Fournisseurs", heading_style))
             
             supplier_data = [["Fournisseur", "Score", "Niveau", "Retard Moy.", "Défaut %"]]
             for s in report_data["suppliers"][:10]:  # Limit to 10 for PDF
@@ -371,7 +371,7 @@ async def export_pdf(
         
         # Predictions Section
         if report_data["predictions"]:
-            elements.append(Paragraph("🔮 Prédictions", heading_style))
+            elements.append(Paragraph("Predictions", heading_style))
             
             pred_data = [["Fournisseur", "Défauts Prédits", "Retard Prédit", "Confiance"]]
             for p in report_data["predictions"][:10]:
@@ -398,23 +398,23 @@ async def export_pdf(
         
         # Actions Section
         if report_data["actions"]:
-            elements.append(Paragraph("⚡ Actions Recommandées", heading_style))
+            elements.append(Paragraph("Actions Recommandees", heading_style))
             
             # Group by priority
             high_actions = [a for a in report_data["actions"] if a.get("priority") == "high"]
             medium_actions = [a for a in report_data["actions"] if a.get("priority") == "medium"]
             
             if high_actions:
-                elements.append(Paragraph("🔴 Priorité Haute:", styles['Normal']))
+                elements.append(Paragraph("[HAUTE PRIORITE]", styles['Normal']))
                 for a in high_actions[:5]:
-                    action_text = f"• {a.get('supplier', '')}: {a.get('action', '')} - {a.get('raison', '')}"
+                    action_text = f"- {a.get('supplier', '')}: {a.get('action', '')} - {a.get('raison', '')}"
                     elements.append(Paragraph(action_text, styles['Normal']))
                 elements.append(Spacer(1, 10))
             
             if medium_actions:
-                elements.append(Paragraph("🟡 Priorité Moyenne:", styles['Normal']))
+                elements.append(Paragraph("[PRIORITE MOYENNE]", styles['Normal']))
                 for a in medium_actions[:5]:
-                    action_text = f"• {a.get('supplier', '')}: {a.get('action', '')} - {a.get('raison', '')}"
+                    action_text = f"- {a.get('supplier', '')}: {a.get('action', '')} - {a.get('raison', '')}"
                     elements.append(Paragraph(action_text, styles['Normal']))
         
         # Build PDF

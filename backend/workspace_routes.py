@@ -2079,6 +2079,25 @@ async def get_multi_model_predictions(
 # EXPORT ENDPOINTS (PDF/Excel)
 # ============================================
 
+def _get_kpi_unit(kpi_name: str) -> str:
+    """Helper function to get units for KPI indicators."""
+    units = {
+        'taux_retard': '%',
+        'taux_defaut': '%',
+        'taux_defauts': '%',
+        'taux_conformite': '%',
+        'retard_moyen': 'jours',
+        'delai_moyen': 'jours',
+        'nb_commandes': '',
+        'commandes_parfaites': '',
+        'score_global': '/100',
+        'score_qualite': '/100',
+        'score_ponctualite': '/100',
+        'variabilite_defauts': '%',
+        'variabilite_retards': '%',
+    }
+    return units.get(kpi_name.lower(), '')
+
 @router.get("/{workspace_id}/export/excel")
 async def export_to_excel(
     workspace_id: uuid.UUID,
@@ -2091,18 +2110,34 @@ async def export_to_excel(
     """
     Export workspace data, dashboard, and predictions to Excel format.
     Supports filtering by supplier.
+    
+    Returns a complete Excel workbook with multiple sheets:
+    - Données: Raw normalized data
+    - KPIs: Dashboard indicators
+    - Risques Fournisseurs: Supplier risk scores
+    - Prédictions: ML predictions per supplier
+    - Actions Recommandées: Priority action items
     """
+    # Pre-check: Verify openpyxl is installed before processing
+    try:
+        import openpyxl  # noqa: F401
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="Le module openpyxl n'est pas installé. Exécutez: pip install openpyxl"
+        )
+    
     workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace non trouvé")
     
     df = get_workspace_dataframe(workspace_id, db)
     if df is None or df.empty:
-        raise HTTPException(status_code=400, detail="Aucune donnée disponible")
+        raise HTTPException(status_code=400, detail="Aucune donnée disponible pour ce workspace")
     
     try:
         # Filter by supplier if specified
-        if supplier:
+        if supplier and supplier != 'all':
             df = df[df['supplier'] == supplier]
             if df.empty:
                 raise HTTPException(status_code=404, detail=f"Fournisseur '{supplier}' non trouvé")
@@ -2111,40 +2146,56 @@ async def export_to_excel(
         output = io.BytesIO()
         
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Sheet 1: Raw Data
-            df_export = df.copy()
-            df_export.to_excel(writer, sheet_name='Données', index=False)
+            # Sheet 1: Workspace Info
+            info_data = {
+                'Propriété': ['Nom du Workspace', 'Type de Cas', 'Date d\'export', 'Fournisseur filtré', 'Nombre de lignes', 'Nombre de fournisseurs'],
+                'Valeur': [
+                    workspace.name,
+                    workspace.data_type.value if workspace.data_type else 'N/A',
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    supplier if supplier and supplier != 'all' else 'Tous',
+                    len(df),
+                    df['supplier'].nunique() if 'supplier' in df.columns else 0
+                ]
+            }
+            pd.DataFrame(info_data).to_excel(writer, sheet_name='Informations', index=False)
             
-            # Sheet 2: Dashboard KPIs
+            # Sheet 2: Raw Data
+            df_export = df.copy()
+            df_export.to_excel(writer, sheet_name='Données Normalisées', index=False)
+            
+            # Sheet 3: Dashboard KPIs
             if include_dashboard:
                 kpis = calculate_case_specific_kpis(df, workspace.data_type)
-                kpi_df = pd.DataFrame([
-                    {"KPI": k, "Valeur": v} for k, v in kpis.items()
-                ])
-                kpi_df.to_excel(writer, sheet_name='KPIs', index=False)
+                kpi_rows = [{"Indicateur": k, "Valeur": v, "Unité": _get_kpi_unit(k)} for k, v in kpis.items()]
+                kpi_df = pd.DataFrame(kpi_rows)
+                kpi_df.to_excel(writer, sheet_name='KPIs Dashboard', index=False)
             
-            # Sheet 3: Supplier Risks
+            # Sheet 4: Supplier Risks
             risques = calculate_case_specific_supplier_risks(df, workspace.data_type)
-            if supplier:
-                risques = [r for r in risques if r['supplier'] == supplier]
-            risques_df = pd.DataFrame(risques)
-            risques_df.to_excel(writer, sheet_name='Risques Fournisseurs', index=False)
+            if supplier and supplier != 'all':
+                risques = [r for r in risques if r.get('supplier') == supplier]
+            if risques:
+                risques_df = pd.DataFrame(risques)
+                risques_df.to_excel(writer, sheet_name='Risques Fournisseurs', index=False)
             
-            # Sheet 4: Predictions
+            # Sheet 5: Predictions
             if include_predictions:
                 predictions = calculate_case_specific_predictions(df, workspace.data_type)
-                if supplier:
-                    predictions = [p for p in predictions if p['supplier'] == supplier]
-                pred_df = pd.DataFrame(predictions)
-                pred_df.to_excel(writer, sheet_name='Prédictions', index=False)
+                if supplier and supplier != 'all':
+                    predictions = [p for p in predictions if p.get('supplier') == supplier]
+                if predictions:
+                    pred_df = pd.DataFrame(predictions)
+                    pred_df.to_excel(writer, sheet_name='Prédictions', index=False)
             
-            # Sheet 5: Recommended Actions
-            if include_actions:
+            # Sheet 6: Recommended Actions
+            if include_actions and risques:
                 actions = calculate_case_specific_actions(risques, workspace.data_type)
-                if supplier:
-                    actions = [a for a in actions if a['supplier'] == supplier]
-                actions_df = pd.DataFrame(actions)
-                actions_df.to_excel(writer, sheet_name='Actions Recommandées', index=False)
+                if supplier and supplier != 'all':
+                    actions = [a for a in actions if a.get('supplier') == supplier]
+                if actions:
+                    actions_df = pd.DataFrame(actions)
+                    actions_df.to_excel(writer, sheet_name='Actions Recommandées', index=False)
         
         output.seek(0)
         

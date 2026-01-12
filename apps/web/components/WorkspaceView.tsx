@@ -17,7 +17,7 @@ import {
   Upload, ArrowLeft, Database, Settings, FileText, Download,
   AlertCircle, CheckCircle, TrendingUp, TrendingDown, Activity,
   BarChart3, PieChart as PieChartIcon, Filter, Plus, X, Trash2,
-  Zap, RefreshCw, FileSpreadsheet, Table
+  Zap, RefreshCw, FileSpreadsheet, Table, Users, FileDown
 } from 'lucide-react';
 import LLMColumnMapper from './LLMColumnMapper';
 
@@ -415,11 +415,34 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
       const supplierParam = selectedSupplier !== 'all' ? `&supplier=${encodeURIComponent(selectedSupplier)}` : '';
       const response = await axios.get(
         `${API_BASE_URL}/api/workspaces/${workspaceId}/export/excel?include_dashboard=${includeAll}&include_predictions=${includeAll}&include_actions=${includeAll}${supplierParam}`,
-        { responseType: 'blob' }
+        { 
+          responseType: 'blob',
+          timeout: 60000,
+          validateStatus: (status) => status < 500
+        }
       );
 
+      // Check if response is an error (JSON error message)
+      if (response.status >= 400) {
+        const errorText = await response.data.text();
+        try {
+          const errorJson = JSON.parse(errorText);
+          throw new Error(errorJson.detail || 'Erreur lors de l\'export Excel');
+        } catch {
+          throw new Error(errorText || 'Erreur lors de l\'export Excel');
+        }
+      }
+
+      // Verify it's actually an Excel file
+      const contentType = response.headers['content-type'];
+      if (contentType && !contentType.includes('spreadsheet') && !contentType.includes('excel')) {
+        throw new Error('Réponse inattendue du serveur');
+      }
+
       // Create download link
-      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const url = window.URL.createObjectURL(new Blob([response.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      }));
       const link = document.createElement('a');
       link.href = url;
       const timestamp = new Date().toISOString().slice(0, 10);
@@ -429,9 +452,10 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Excel export error:', err);
-      alert('Erreur lors de l\'export Excel');
+      const message = err?.message || err?.response?.data?.detail || 'Erreur lors de l\'export Excel';
+      alert(message);
     } finally {
       setExportLoading(false);
     }
@@ -489,6 +513,59 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
     } catch (err) {
       console.error('Report export error:', err);
       alert('Erreur lors de l\'export du rapport');
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  // PDF Export Handler - Full Workspace Anticipation Report
+  const handleExportPDF = async () => {
+    setExportLoading(true);
+    try {
+      const supplierParam = selectedSupplier !== 'all' ? `?supplier=${encodeURIComponent(selectedSupplier)}` : '';
+      const response = await axios.get(
+        `${API_BASE_URL}/api/reports/${workspaceId}/export/pdf${supplierParam}`,
+        { 
+          responseType: 'blob',
+          timeout: 60000,
+          validateStatus: (status) => status < 500
+        }
+      );
+
+      // Check if response is an error
+      if (response.status >= 400) {
+        const errorText = await response.data.text();
+        try {
+          const errorJson = JSON.parse(errorText);
+          throw new Error(errorJson.detail || 'Erreur lors de l\'export PDF');
+        } catch {
+          throw new Error(errorText || 'Erreur lors de l\'export PDF');
+        }
+      }
+
+      // Verify it's actually a PDF
+      const contentType = response.headers['content-type'];
+      if (contentType && !contentType.includes('pdf')) {
+        throw new Error('Réponse inattendue du serveur');
+      }
+
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data], {
+        type: 'application/pdf'
+      }));
+      const link = document.createElement('a');
+      link.href = url;
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const supplierSuffix = selectedSupplier !== 'all' ? `_${selectedSupplier}` : '';
+      link.setAttribute('download', `rapport_anticipation_${workspaceName}${supplierSuffix}_${timestamp}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error('PDF export error:', err);
+      const message = err?.message || err?.response?.data?.detail || 'Erreur lors de l\'export PDF';
+      alert(message);
     } finally {
       setExportLoading(false);
     }
@@ -919,6 +996,63 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
         {/* Setup Tab - Shows workspace metadata without loading dashboard */}
         {activeTab === 'setup' && (
           <div className="space-y-6">
+            {/* Add Supplier / Import Data Section - PROMINENT CTA */}
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-6 shadow-lg">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div className="text-white">
+                  <h3 className="text-xl font-bold mb-2 flex items-center gap-2">
+                    <Users className="h-6 w-6" />
+                    Ajouter des Fournisseurs
+                  </h3>
+                  <p className="text-blue-100">
+                    Importez vos données fournisseurs pour ce workspace. 
+                    {workspaceInfo?.dataset?.has_data 
+                      ? ` Actuellement ${workspaceInfo.dataset.suppliers?.length || 0} fournisseur(s) importé(s).`
+                      : ' Aucun fournisseur importé.'}
+                  </p>
+                </div>
+                <div className="flex gap-3">
+                  {/* Standard Upload Button */}
+                  <label className="relative cursor-pointer">
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={handleFileUpload}
+                      disabled={uploading}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    />
+                    <div className={`flex items-center gap-2 px-5 py-3 rounded-lg font-medium transition-colors ${
+                      uploading ? 'bg-white/50 text-blue-300' : 'bg-white text-blue-600 hover:bg-blue-50'
+                    }`}>
+                      <Upload className="h-5 w-5" />
+                      Importer CSV
+                    </div>
+                  </label>
+                  {/* Smart Upload Button */}
+                  <label className="relative cursor-pointer">
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={handleSmartUpload}
+                      disabled={uploading}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    />
+                    <div className={`flex items-center gap-2 px-5 py-3 rounded-lg font-medium transition-colors ${
+                      uploading ? 'bg-yellow-200 text-yellow-500' : 'bg-yellow-400 text-yellow-900 hover:bg-yellow-300'
+                    }`}>
+                      <Zap className="h-5 w-5" />
+                      Import Intelligent
+                    </div>
+                  </label>
+                </div>
+              </div>
+              {uploadError && (
+                <div className="mt-4 p-3 bg-red-500/20 border border-red-400/30 rounded-lg">
+                  <p className="text-red-100 text-sm">{uploadError}</p>
+                </div>
+              )}
+            </div>
+
             {/* Workspace Metadata Card */}
             <div className="bg-white rounded-xl p-6 shadow">
               <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
@@ -2457,6 +2591,29 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                 >
                   {exportLoading ? <RefreshCw className="h-5 w-5 animate-spin" /> : <FileText className="h-5 w-5" />}
                   Générer Rapport
+                </button>
+              </div>
+            </div>
+
+            {/* PDF Workspace Report Export */}
+            <div className="bg-gradient-to-r from-red-600 to-rose-600 rounded-xl p-6 shadow text-white">
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div>
+                  <h3 className="font-semibold text-lg mb-1">📄 Rapport PDF Complet</h3>
+                  <p className="text-red-100 text-sm">
+                    Rapport d'anticipation complet du workspace : KPIs, fournisseurs, prédictions et actions recommandées
+                  </p>
+                  <p className="text-red-200 text-xs mt-1">
+                    Inclut : Nom et type du workspace • Liste des fournisseurs • KPIs par fournisseur • Résumés des prédictions • Actions prioritaires
+                  </p>
+                </div>
+                <button
+                  onClick={handleExportPDF}
+                  disabled={exportLoading}
+                  className="flex items-center gap-2 px-6 py-3 bg-white text-red-600 hover:bg-red-50 rounded-lg font-medium disabled:opacity-50"
+                >
+                  {exportLoading ? <RefreshCw className="h-5 w-5 animate-spin" /> : <FileDown className="h-5 w-5" />}
+                  Télécharger PDF
                 </button>
               </div>
             </div>

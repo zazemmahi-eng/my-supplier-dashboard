@@ -522,7 +522,7 @@ export default function GlobalDashboardPage() {
         </div>
 
         {/* Quick Actions */}
-        <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4">
           <Link href="/workspaces">
             <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl p-6 text-white hover:from-blue-600 hover:to-blue-700 transition-all cursor-pointer shadow-lg">
               <FolderOpen className="h-8 w-8 mb-3 opacity-90" />
@@ -536,14 +536,6 @@ export default function GlobalDashboardPage() {
               <Plus className="h-8 w-8 mb-3 opacity-90" />
               <h3 className="font-semibold text-lg mb-1">Nouveau Workspace</h3>
               <p className="text-emerald-100 text-sm">Démarrer une nouvelle analyse</p>
-            </div>
-          </Link>
-          
-          <Link href="/workspaces">
-            <div className="bg-gradient-to-r from-purple-500 to-purple-600 rounded-xl p-6 text-white hover:from-purple-600 hover:to-purple-700 transition-all cursor-pointer shadow-lg">
-              <Target className="h-8 w-8 mb-3 opacity-90" />
-              <h3 className="font-semibold text-lg mb-1">Ajouter un Fournisseur</h3>
-              <p className="text-purple-100 text-sm">Importer des données fournisseur</p>
             </div>
           </Link>
         </div>
