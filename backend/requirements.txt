@@ -23,6 +23,9 @@ python-dateutil==2.9.0.post0
 # Machine Learning - NOUVEAU pour Prédictions Avancées v3.0
 scikit-learn==1.5.2
 
+# LLM Integration - Groq API for intelligent CSV ingestion
+groq==1.0.0
+
 # Utilitaires
 typing-extensions==4.12.2
 

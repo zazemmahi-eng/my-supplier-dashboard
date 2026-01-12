@@ -2,10 +2,12 @@
 """
 LLM-Based CSV Ingestion and Normalization Module
 
-This module provides intelligent CSV column mapping using LLM suggestions
+This module provides intelligent CSV column mapping using LOCAL Ollama LLM
 and robust data transformation/validation using Python (Pandas).
 
 Key Features:
+- Uses LOCAL Ollama (Llama 3) for intelligent column mapping suggestions
+- NO external/cloud API calls - fully local inference
 - Analyzes arbitrary CSV schemas and suggests column mappings
 - Handles multiple date formats automatically
 - Normalizes defects to 0-1 range
@@ -25,6 +27,12 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field, asdict
 from enum import Enum
+import os
+import requests
+
+# Ollama Local LLM Configuration
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")  # Use mistral or any model installed locally via Ollama
 
 
 # ============================================
@@ -104,14 +112,16 @@ class IngestionResult:
 
 class LLMColumnAnalyzer:
     """
-    Analyzes CSV columns and suggests mappings using pattern matching
-    and heuristics. In production, this would call an actual LLM API.
+    Analyzes CSV columns and suggests mappings using LOCAL Ollama LLM.
+    Falls back to pattern matching if Ollama is unavailable.
+    
+    NO EXTERNAL API CALLS - uses only local Ollama instance.
     
     The LLM only SUGGESTS mappings - it does NOT transform data.
     All transformations are done by Python code in DataNormalizer.
     """
     
-    # Common patterns for column name recognition
+    # Common patterns for column name recognition (fallback)
     SUPPLIER_PATTERNS = [
         r'supplier', r'vendor', r'fournisseur', r'provider', r'source',
         r'company', r'partner', r'manufacturer', r'distributor'
@@ -120,7 +130,7 @@ class LLMColumnAnalyzer:
     DATE_PROMISED_PATTERNS = [
         r'date_promised', r'promised', r'expected', r'due', r'target',
         r'scheduled', r'planned', r'delivery_date', r'date_prevue',
-        r'date_attendue', r'echeance'
+        r'date_attendue', r'echeance', r'date_commande'
     ]
     
     DATE_DELIVERED_PATTERNS = [
@@ -159,15 +169,174 @@ class LLMColumnAnalyzer:
     ]
     
     def __init__(self):
-        """Initialize the analyzer"""
-        pass
+        """Initialize the analyzer - checks if Ollama is available locally"""
+        self.ollama_available = self._check_ollama_available()
+        self.ollama_model = self._get_best_available_model()
+        if self.ollama_available and self.ollama_model:
+            print(f"✅ Local Ollama LLM available at {OLLAMA_BASE_URL} (model: {self.ollama_model})")
+        else:
+            print(f"⚠️ Ollama not available or no suitable model. Using pattern-based fallback.")
+    
+    def _get_best_available_model(self) -> Optional[str]:
+        """Get the best available model from Ollama (prefer smaller models for low memory)"""
+        try:
+            response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=2)
+            if response.status_code == 200:
+                models = response.json().get("models", [])
+                model_names = [m["name"] for m in models]
+                # Prefer smaller models first (for memory constraints)
+                preferred_order = ["tinyllama", "phi", "gemma:2b", "llama3:8b", "mistral", "llama3", "llama2"]
+                for preferred in preferred_order:
+                    for name in model_names:
+                        if preferred in name.lower():
+                            return name
+                # Return first available if no preferred found
+                return model_names[0] if model_names else None
+        except Exception:
+            pass
+        return OLLAMA_MODEL  # Default
+    
+    def _check_ollama_available(self) -> bool:
+        """Check if Ollama is running locally"""
+        try:
+            response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=2)
+            return response.status_code == 200
+        except Exception:
+            return False
+    
+    def _call_ollama_llm(self, columns_info: List[Dict]) -> Optional[Dict]:
+        """
+        Call LOCAL Ollama LLM to analyze columns and suggest mappings.
+        
+        NO EXTERNAL API - uses only local Ollama instance on localhost:11434.
+        
+        Args:
+            columns_info: List of dicts with column name, type, and sample values
+            
+        Returns:
+            LLM response with mapping suggestions or None if failed
+        """
+        if not self.ollama_available:
+            return None
+        
+        # Build the prompt for column mapping
+        prompt = """You are a data analyst expert. Analyze these CSV columns and suggest mappings for a supplier risk analysis system.
+
+IMPORTANT SYNONYMS TO DETECT:
+- "fournisseur" = "supplier" (French for supplier)
+- "vendor", "provider", "company" = "supplier"
+- "date_commande" = "date_promised" or "order_date" (French for order date)
+- "date_livraison", "date_reelle" = "date_delivered" (French for delivery date)
+- "date_prevue", "date_attendue" = "date_promised" (French for expected date)
+- "retard" = "delay" (French for delay)
+- "defaut", "taux_defaut" = "defects" (French for defects)
+- "qualite" = "quality_score" (French for quality)
+
+The target columns we need are:
+- supplier: Company/vendor name (REQUIRED) - synonyms: fournisseur, vendor, provider
+- date_promised: Expected delivery date - synonyms: date_commande, date_prevue, due_date, expected
+- date_delivered: Actual delivery date - synonyms: date_livraison, date_reelle, received
+- order_date: When order was placed - synonyms: date_commande, purchase_date
+- delay: Number of days late (positive = late, negative = early) - synonyms: retard, days_late
+- defects: Defect rate as decimal 0-1 (e.g., 0.05 = 5% defects) - synonyms: defaut, taux_defaut
+- quality_score: Quality score (will be converted: defects = 1 - quality_score/100) - synonyms: qualite
+- ignore: Column not needed for analysis
+
+For each column, provide:
+1. target_role: One of the target columns above
+2. confidence: 0.0-1.0 confidence score
+3. reasoning: Brief explanation
+4. transformation_needed: null or one of: "parse_date", "convert_percentage_to_decimal", "convert_quality_to_defects"
+
+CSV Columns to analyze:
+"""
+        for col in columns_info:
+            prompt += f"\n- Column: '{col['name']}'\n"
+            prompt += f"  Type: {col['type']}\n"
+            prompt += f"  Sample values: {col['samples']}\n"
+        
+        prompt += """
+
+Respond with ONLY valid JSON in this exact format:
+{
+  "mappings": [
+    {
+      "source_column": "column_name",
+      "target_role": "supplier|date_promised|date_delivered|order_date|delay|defects|quality_score|ignore",
+      "confidence": 0.95,
+      "reasoning": "Brief explanation",
+      "transformation_needed": null
+    }
+  ],
+  "detected_case": "delay_only|defects_only|mixed|unknown"
+}"""
+        
+        try:
+            # Use dynamically selected model or fallback
+            model_to_use = self.ollama_model or OLLAMA_MODEL
+            
+            # Call LOCAL Ollama API (no external calls)
+            response = requests.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": model_to_use,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.1,  # Low temperature for deterministic results
+                        "num_predict": 2000
+                    }
+                },
+                timeout=120  # Local LLM may take time
+            )
+            
+            if response.status_code != 200:
+                error_msg = response.text
+                print(f"⚠️ Ollama returned status {response.status_code}: {error_msg[:100]}")
+                return None
+            
+            # Parse the response
+            result = response.json()
+            response_text = result.get("response", "").strip()
+            
+            print(f"📝 Raw LLM response length: {len(response_text)} chars")
+            
+            # Remove markdown code blocks if present
+            response_text = re.sub(r'^```(?:json)?\s*', '', response_text)
+            response_text = re.sub(r'\s*```\s*$', '', response_text)
+            
+            # Find JSON object in response (LLM might add extra text before/after)
+            json_match = re.search(r'\{[^{}]*"mappings"[^{}]*\[[\s\S]*?\]\s*,?\s*"detected_case"[^{}]*\}', response_text)
+            if not json_match:
+                # Try simpler pattern
+                json_match = re.search(r'\{[\s\S]*"mappings"[\s\S]*\}', response_text)
+            
+            if json_match:
+                response_text = json_match.group(0)
+                # Clean up common JSON issues from small LLMs
+                response_text = re.sub(r',\s*}', '}', response_text)  # Remove trailing commas
+                response_text = re.sub(r',\s*]', ']', response_text)  # Remove trailing commas in arrays
+            
+            parsed = json.loads(response_text)
+            print(f"✅ Successfully parsed LLM JSON response")
+            return parsed
+            
+        except json.JSONDecodeError as e:
+            print(f"⚠️ Failed to parse LLM response as JSON: {e}")
+            return None
+        except requests.exceptions.Timeout:
+            print("⚠️ Ollama request timed out")
+            return None
+        except Exception as e:
+            print(f"⚠️ Ollama API call failed: {e}")
+            return None
     
     def analyze_csv(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
         Analyze a DataFrame and return column mapping suggestions.
         
-        This simulates what an LLM would do: analyze column names and sample data
-        to suggest appropriate mappings. The LLM provides SUGGESTIONS ONLY.
+        Uses LOCAL Ollama LLM for intelligent analysis, with fallback
+        to pattern matching if Ollama is unavailable.
         
         Args:
             df: Input DataFrame to analyze
@@ -175,17 +344,19 @@ class LLMColumnAnalyzer:
         Returns:
             Dictionary with mapping suggestions and analysis metadata
         """
-        mappings = []
+        # Prepare column info for analysis
+        columns_info = []
         column_analysis = []
         
         for col in df.columns:
-            # Get sample values (non-null, unique)
             sample_values = df[col].dropna().head(10).astype(str).tolist()
             detected_type = self._detect_column_type(df[col])
             
-            # Analyze column name and content
-            mapping = self._suggest_mapping(col, sample_values, detected_type)
-            mappings.append(mapping)
+            columns_info.append({
+                "name": col,
+                "type": detected_type,
+                "samples": sample_values[:5]
+            })
             
             column_analysis.append({
                 "column": col,
@@ -195,8 +366,47 @@ class LLMColumnAnalyzer:
                 "unique_count": int(df[col].nunique())
             })
         
-        # Determine which case this data supports
-        detected_case = self._detect_case(mappings)
+        # Try LOCAL Ollama LLM-based analysis first
+        llm_result = self._call_ollama_llm(columns_info)
+        
+        if llm_result and "mappings" in llm_result:
+            print("✅ Using LOCAL Ollama LLM for column mapping analysis")
+            
+            # Convert LLM response to our format
+            mappings = []
+            for llm_mapping in llm_result["mappings"]:
+                try:
+                    role = ColumnRole(llm_mapping["target_role"])
+                except ValueError:
+                    role = ColumnRole.IGNORE
+                    
+                # Find matching column info
+                col_info = next((c for c in column_analysis if c["column"] == llm_mapping["source_column"]), None)
+                
+                mappings.append(ColumnMapping(
+                    source_column=llm_mapping["source_column"],
+                    target_role=role,
+                    confidence=float(llm_mapping.get("confidence", 0.8)),
+                    reasoning=f"[LLM] {llm_mapping.get('reasoning', 'Suggested by AI')}",
+                    sample_values=col_info["sample_values"] if col_info else [],
+                    detected_type=col_info["detected_type"] if col_info else "string",
+                    transformation_needed=llm_mapping.get("transformation_needed")
+                ))
+            
+            detected_case = llm_result.get("detected_case", self._detect_case(mappings))
+            
+        else:
+            # Fallback to pattern matching
+            print("⚠️ Using pattern-based fallback for column mapping")
+            mappings = []
+            
+            for col in df.columns:
+                sample_values = df[col].dropna().head(10).astype(str).tolist()
+                detected_type = self._detect_column_type(df[col])
+                mapping = self._suggest_mapping(col, sample_values, detected_type)
+                mappings.append(mapping)
+            
+            detected_case = self._detect_case(mappings)
         
         # Check for potential issues
         issues = self._check_mapping_issues(mappings, detected_case)
@@ -206,7 +416,8 @@ class LLMColumnAnalyzer:
             "column_analysis": column_analysis,
             "detected_case": detected_case,
             "issues": issues,
-            "recommendation": self._get_recommendation(detected_case, issues)
+            "recommendation": self._get_recommendation(detected_case, issues),
+            "llm_used": llm_result is not None
         }
     
     def _detect_column_type(self, series: pd.Series) -> str:

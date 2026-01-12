@@ -11,6 +11,7 @@ interface HeroProps {
   image?: React.ReactNode;
   className?: string;
   animate?: boolean;
+  spacing?: 'default' | 'compact';
 }
 
 export function Hero({
@@ -21,17 +22,19 @@ export function Hero({
   image,
   className,
   animate = true,
+  spacing = 'default',
 }: HeroProps) {
   return (
-    <div className={cn('mx-auto flex flex-col space-y-20', className)}>
+    <div className={cn(
+      'mx-auto flex flex-col',
+      spacing === 'compact' ? 'space-y-8 lg:space-y-12' : 'space-y-20',
+      className
+    )}>
       <div
-        style={{
-          MozAnimationDuration: '100ms',
-        }}
         className={cn(
-          'mx-auto flex flex-1 flex-col items-center justify-center duration-800 md:flex-row',
+          'mx-auto flex flex-1 flex-col items-center justify-center md:flex-row',
           {
-            ['animate-in fade-in zoom-in-90 slide-in-from-top-24']: animate,
+            ['animate-in fade-in zoom-in-90 slide-in-from-top-24 duration-700']: animate,
           },
         )}
       >
@@ -74,13 +77,14 @@ export function Hero({
 
       {image && (
         <div
-          style={{
-            MozAnimationDuration: '100ms',
-          }}
-          className={cn('container mx-auto flex justify-center py-8', {
-            ['animate-in fade-in zoom-in-90 slide-in-from-top-32 fill-mode-both delay-600 duration-1000']:
-              animate,
-          })}
+          className={cn(
+            'container mx-auto flex justify-center',
+            spacing === 'compact' ? 'py-4' : 'py-8',
+            {
+              ['animate-in fade-in zoom-in-90 slide-in-from-top-32 fill-mode-both delay-600 duration-1000']:
+                animate,
+            }
+          )}
         >
           {image}
         </div>
