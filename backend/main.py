@@ -31,6 +31,7 @@ from backend.database import get_db, init_db
 from backend.upload_routes import router as upload_router, get_uploaded_data
 from backend.workspace_routes import router as workspace_router
 from backend.reporting_routes import router as reporting_router
+from backend.admin_routes import router as admin_router
 
 # ============================================
 # CONFIGURATION FASTAPI
@@ -65,6 +66,9 @@ app.include_router(workspace_router)
 
 # Include reporting/export router
 app.include_router(reporting_router)
+
+# Include admin router
+app.include_router(admin_router)
 
 # ============================================
 # MODÈLES PYDANTIC
