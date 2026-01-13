@@ -26,7 +26,7 @@ from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field
 
 from backend.database import get_db, engine
 from backend.admin_models import UserRole, UserRoleAssignment, AdminAuditLog
@@ -68,7 +68,7 @@ class UserListItem(BaseModel):
 
 class UserCreateRequest(BaseModel):
     """Request to create a new user"""
-    email: EmailStr
+    email: str = Field(..., description="User email address")
     display_name: Optional[str] = None
     password: str = Field(..., min_length=8)
     role: str = "user"
@@ -166,6 +166,120 @@ def log_admin_action(
     )
     db.add(log_entry)
     db.commit()
+
+
+# ============================================
+# PUBLIC ROLE CHECK ENDPOINT (No admin auth required)
+# ============================================
+
+@router.get("/check-user-role")
+async def check_user_role(
+    user_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Check if a user has admin role.
+    
+    This endpoint is used after Supabase authentication to determine
+    where to redirect the user (admin panel vs user dashboard).
+    
+    Called from the auth callback to check role BEFORE setting admin headers.
+    """
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except ValueError:
+        return {"role": "user", "is_admin": False, "redirect": "/dashboard"}
+    
+    # Check user role in database
+    user_role = db.query(UserRoleAssignment).filter(
+        UserRoleAssignment.user_id == user_uuid
+    ).first()
+    
+    if not user_role:
+        # User not in role system = regular user
+        return {
+            "role": "user",
+            "is_admin": False,
+            "redirect": "/dashboard",
+            "display_name": None
+        }
+    
+    if user_role.role == UserRole.ADMIN and user_role.is_active:
+        return {
+            "role": "admin",
+            "is_admin": True,
+            "redirect": "/admin",
+            "display_name": user_role.display_name,
+            "email": user_role.email
+        }
+    
+    return {
+        "role": "user",
+        "is_admin": False,
+        "redirect": "/dashboard",
+        "display_name": user_role.display_name
+    }
+
+
+@router.post("/promote-to-admin")
+async def promote_user_to_admin(
+    user_id: str,
+    email: str,
+    display_name: Optional[str] = None,
+    admin: AdminUserInfo = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Promote an existing user to admin role.
+    Only existing admins can promote others.
+    """
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid user ID format")
+    
+    # Check if already has a role
+    existing_role = db.query(UserRoleAssignment).filter(
+        UserRoleAssignment.user_id == user_uuid
+    ).first()
+    
+    if existing_role:
+        if existing_role.role == UserRole.ADMIN:
+            raise HTTPException(status_code=400, detail="User is already an admin")
+        
+        # Update to admin
+        existing_role.role = UserRole.ADMIN
+        existing_role.assigned_by = uuid.UUID(admin.user_id)
+        existing_role.display_name = display_name or existing_role.display_name
+        db.commit()
+    else:
+        # Create new admin role
+        new_role = UserRoleAssignment(
+            user_id=user_uuid,
+            email=email,
+            display_name=display_name,
+            role=UserRole.ADMIN,
+            assigned_by=uuid.UUID(admin.user_id),
+            is_active=True
+        )
+        db.add(new_role)
+        db.commit()
+    
+    # Log the action
+    log_admin_action(
+        db=db,
+        admin_user_id=admin.user_id,
+        action="promote_to_admin",
+        target_type="user",
+        target_id=user_id,
+        details=f"Promoted {email} to admin role"
+    )
+    
+    return {
+        "success": True,
+        "message": f"User {email} has been promoted to admin",
+        "user_id": user_id
+    }
 
 
 # ============================================

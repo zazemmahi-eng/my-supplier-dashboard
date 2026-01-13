@@ -9,6 +9,8 @@
  * 
  * ADMIN MODE is clearly indicated throughout the UI.
  * All actions are READ-ONLY except for user management.
+ * 
+ * NOTE: Authentication is handled by the parent layout.tsx
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -103,11 +105,9 @@ const COLORS = {
 export default function AdminDashboard() {
   const router = useRouter();
   
-  // Auth state
+  // Auth state - credentials from layout via localStorage
   const [adminUserId, setAdminUserId] = useState<string | null>(null);
   const [adminEmail, setAdminEmail] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState<boolean>(false);
-  const [checkingAuth, setCheckingAuth] = useState(true);
   
   // Data state
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -123,62 +123,18 @@ export default function AdminDashboard() {
   const [deleting, setDeleting] = useState(false);
   
   // ============================================
-  // AUTH CHECK
+  // LOAD ADMIN CREDENTIALS (set by layout.tsx)
   // ============================================
   
   useEffect(() => {
-    const checkAdminAccess = async () => {
-      setCheckingAuth(true);
-      
-      // Get user ID from localStorage or session
-      // In production, this would come from Supabase auth
-      const storedUserId = localStorage.getItem('admin_user_id');
-      const storedEmail = localStorage.getItem('admin_email');
-      
-      if (!storedUserId) {
-        // For demo: prompt for admin credentials
-        const userId = prompt('Enter your Admin User ID:');
-        const email = prompt('Enter your Admin Email:');
-        
-        if (userId && email) {
-          localStorage.setItem('admin_user_id', userId);
-          localStorage.setItem('admin_email', email);
-          setAdminUserId(userId);
-          setAdminEmail(email);
-        } else {
-          setError('Admin authentication required');
-          setCheckingAuth(false);
-          return;
-        }
-      } else {
-        setAdminUserId(storedUserId);
-        setAdminEmail(storedEmail);
-      }
-      
-      // Verify admin role
-      try {
-        const response = await axios.get(`${API_BASE_URL}/api/admin/check-role`, {
-          headers: {
-            'X-Admin-User-ID': storedUserId || localStorage.getItem('admin_user_id')
-          }
-        });
-        
-        if (response.data.is_admin) {
-          setIsAdmin(true);
-        } else {
-          setError('Access denied. Admin privileges required.');
-          localStorage.removeItem('admin_user_id');
-          localStorage.removeItem('admin_email');
-        }
-      } catch (err) {
-        console.error('Admin check failed:', err);
-        setError('Failed to verify admin access');
-      }
-      
-      setCheckingAuth(false);
-    };
+    // Layout.tsx handles auth and stores credentials in localStorage
+    const storedUserId = localStorage.getItem('admin_user_id');
+    const storedEmail = localStorage.getItem('admin_email');
     
-    checkAdminAccess();
+    if (storedUserId && storedEmail) {
+      setAdminUserId(storedUserId);
+      setAdminEmail(storedEmail);
+    }
   }, []);
   
   // ============================================
@@ -195,7 +151,7 @@ export default function AdminDashboard() {
   // ============================================
   
   const fetchStats = useCallback(async () => {
-    if (!isAdmin) return;
+    if (!adminUserId) return;
     
     try {
       const response = await axios.get(`${API_BASE_URL}/api/admin/stats`, {
@@ -206,10 +162,10 @@ export default function AdminDashboard() {
       console.error('Failed to fetch stats:', err);
       setError('Failed to load statistics');
     }
-  }, [isAdmin, getHeaders]);
+  }, [adminUserId, getHeaders]);
   
   const fetchUsers = useCallback(async () => {
-    if (!isAdmin) return;
+    if (!adminUserId) return;
     
     try {
       const response = await axios.get(`${API_BASE_URL}/api/admin/users`, {
@@ -220,10 +176,10 @@ export default function AdminDashboard() {
       console.error('Failed to fetch users:', err);
       setError('Failed to load users');
     }
-  }, [isAdmin, getHeaders]);
+  }, [adminUserId, getHeaders]);
   
   const fetchUserDetails = useCallback(async (userId: string) => {
-    if (!isAdmin) return;
+    if (!adminUserId) return;
     
     try {
       const response = await axios.get(`${API_BASE_URL}/api/admin/users/${userId}`, {
@@ -234,16 +190,16 @@ export default function AdminDashboard() {
       console.error('Failed to fetch user details:', err);
       setError('Failed to load user details');
     }
-  }, [isAdmin, getHeaders]);
+  }, [adminUserId, getHeaders]);
   
   // Initial data load
   useEffect(() => {
-    if (isAdmin) {
+    if (adminUserId) {
       setLoading(true);
       Promise.all([fetchStats(), fetchUsers()])
         .finally(() => setLoading(false));
     }
-  }, [isAdmin, fetchStats, fetchUsers]);
+  }, [adminUserId, fetchStats, fetchUsers]);
   
   // ============================================
   // ACTIONS
@@ -272,12 +228,6 @@ export default function AdminDashboard() {
     router.push(`/admin/users/${userId}/workspaces/${workspaceId}`);
   };
   
-  const handleLogout = () => {
-    localStorage.removeItem('admin_user_id');
-    localStorage.removeItem('admin_email');
-    router.push('/dashboard');
-  };
-  
   // ============================================
   // CHART DATA
   // ============================================
@@ -295,32 +245,36 @@ export default function AdminDashboard() {
   );
   
   // ============================================
-  // LOADING / ERROR STATES
+  // LOADING STATE (auth is handled by layout)
   // ============================================
   
-  if (checkingAuth) {
+  if (loading && !stats) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+      <div className="flex items-center justify-center py-20">
         <div className="text-center">
           <div className="animate-spin h-12 w-12 border-4 border-purple-500 border-t-transparent rounded-full mx-auto mb-4" />
-          <p className="text-gray-400">Verifying admin access...</p>
+          <p className="text-gray-400">Loading admin data...</p>
         </div>
       </div>
     );
   }
   
-  if (!isAdmin || error) {
+  if (error) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+      <div className="flex items-center justify-center p-4 py-20">
         <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-center">
-          <Shield className="h-16 w-16 text-red-500 mx-auto mb-4" />
-          <h1 className="text-2xl font-bold text-white mb-2">Access Denied</h1>
-          <p className="text-gray-400 mb-6">{error || 'You do not have admin privileges.'}</p>
+          <AlertTriangle className="h-16 w-16 text-red-500 mx-auto mb-4" />
+          <h1 className="text-2xl font-bold text-white mb-2">Error</h1>
+          <p className="text-gray-400 mb-6">{error}</p>
           <button
-            onClick={() => router.push('/dashboard')}
+            onClick={() => {
+              setError(null);
+              fetchStats();
+              fetchUsers();
+            }}
             className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium"
           >
-            Return to Dashboard
+            Try Again
           </button>
         </div>
       </div>
@@ -332,71 +286,48 @@ export default function AdminDashboard() {
   // ============================================
   
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      {/* Admin Header Banner */}
-      <div className="bg-gradient-to-r from-purple-900 via-purple-800 to-indigo-900 border-b border-purple-700">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="p-2 bg-purple-600 rounded-lg">
-                <Shield className="h-6 w-6 text-white" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold">Admin Dashboard</h1>
-                <p className="text-sm text-purple-300">{adminEmail}</p>
-              </div>
-              <span className="px-3 py-1 bg-red-500/20 border border-red-500/50 text-red-400 text-xs font-bold rounded-full">
-                ADMIN MODE
-              </span>
-            </div>
-            
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => Promise.all([fetchStats(), fetchUsers()])}
-                className="p-2 hover:bg-purple-700/50 rounded-lg transition-colors"
-                title="Refresh"
-              >
-                <RefreshCw className="h-5 w-5" />
-              </button>
-              <button
-                onClick={handleLogout}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium"
-              >
-                Exit Admin
-              </button>
-            </div>
+    <div className="py-6">
+      {/* Content Header with Tabs */}
+      <div className="max-w-7xl mx-auto px-4 mb-6">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-bold">Dashboard Overview</h1>
+            <p className="text-gray-400">Monitor and manage your application</p>
           </div>
+          <button
+            onClick={() => Promise.all([fetchStats(), fetchUsers()])}
+            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors flex items-center gap-2"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </button>
         </div>
-      </div>
-      
-      {/* Tab Navigation */}
-      <div className="border-b border-gray-700 bg-gray-800/50">
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="flex gap-1">
-            {[
-              { id: 'overview', label: 'Overview', icon: BarChart3 },
-              { id: 'users', label: 'User Management', icon: Users },
-              { id: 'audit', label: 'Audit Log', icon: Clock }
-            ].map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
-                className={`flex items-center gap-2 px-4 py-3 font-medium text-sm transition-colors border-b-2 ${
-                  activeTab === tab.id
-                    ? 'border-purple-500 text-purple-400'
-                    : 'border-transparent text-gray-400 hover:text-white'
-                }`}
-              >
-                <tab.icon className="h-4 w-4" />
-                {tab.label}
-              </button>
-            ))}
-          </div>
+        
+        {/* Tab Navigation */}
+        <div className="flex gap-1 border-b border-gray-700">
+          {[
+            { id: 'overview', label: 'Overview', icon: BarChart3 },
+            { id: 'users', label: 'User Management', icon: Users },
+            { id: 'audit', label: 'Audit Log', icon: Clock }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as typeof activeTab)}
+              className={`flex items-center gap-2 px-4 py-3 font-medium text-sm transition-colors border-b-2 ${
+                activeTab === tab.id
+                  ? 'border-purple-500 text-purple-400'
+                  : 'border-transparent text-gray-400 hover:text-white'
+              }`}
+            >
+              <tab.icon className="h-4 w-4" />
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
       
       {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 py-6">
+      <div className="max-w-7xl mx-auto px-4">
         {loading ? (
           <div className="flex items-center justify-center py-20">
             <div className="animate-spin h-8 w-8 border-4 border-purple-500 border-t-transparent rounded-full" />

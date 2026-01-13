@@ -13,6 +13,9 @@ const PathsSchema = z.object({
     home: z.string().min(1),
     profileSettings: z.string().min(1),
   }),
+  admin: z.object({
+    home: z.string().min(1),
+  }),
 });
 
 const pathsConfig = PathsSchema.parse({
@@ -30,6 +33,10 @@ const pathsConfig = PathsSchema.parse({
     
     // 🔥 CHANGEMENT : /home/settings → /dashboard/settings
     profileSettings: '/dashboard/settings',
+  },
+  admin: {
+    // Admin dashboard path
+    home: '/admin',
   },
 } satisfies z.infer<typeof PathsSchema>);
 
