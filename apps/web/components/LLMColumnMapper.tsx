@@ -7,14 +7,15 @@
  * - Edit/override suggested mappings
  * - See warnings and issues
  * - Apply mappings to normalize data
+ * - Configure defect count columns (Case B variant)
  * 
  * The LLM only SUGGESTS mappings - all transformations are done by Python.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Check, X, AlertTriangle, Info, ChevronDown, ChevronUp,
-  RefreshCw, ArrowRight, Edit2, HelpCircle, Zap
+  RefreshCw, ArrowRight, Edit2, HelpCircle, Zap, Calculator
 } from 'lucide-react';
 
 // ============================================
@@ -71,8 +72,12 @@ const TARGET_ROLES = [
   { value: 'date_delivered', label: 'Date Livrée', description: 'Date de livraison effective', icon: '✅' },
   { value: 'order_date', label: 'Date Commande', description: 'Date de la commande', icon: '📦' },
   { value: 'delay', label: 'Retard (jours)', description: 'Nombre de jours de retard', icon: '⏰' },
+  { value: 'delay_direct', label: 'Retard Direct', description: 'Valeur de retard déjà calculée', icon: '⏱️' },
   { value: 'defects', label: 'Défauts', description: 'Taux de défauts (0-1 ou 0-100%)', icon: '🔍' },
   { value: 'quality_score', label: 'Score Qualité', description: 'Score de qualité (sera converti)', icon: '⭐' },
+  { value: 'defective_count', label: 'Pièces Défectueuses', description: 'Nombre de pièces défectueuses', icon: '❌' },
+  { value: 'total_count', label: 'Total Pièces', description: 'Nombre total de pièces', icon: '📊' },
+  { value: 'non_defective_count', label: 'Pièces Conformes', description: 'Nombre de pièces non défectueuses', icon: '✔️' },
   { value: 'ignore', label: 'Ignorer', description: 'Ne pas importer cette colonne', icon: '🚫' },
 ];
 
@@ -131,12 +136,75 @@ export default function LLMColumnMapper({
   const [selectedCase, setSelectedCase] = useState<string>(analysis.detected_case);
   const [expandedColumns, setExpandedColumns] = useState<Set<string>>(new Set());
   const [showAllColumns, setShowAllColumns] = useState(false);
+  
+  // State for defect count configuration (Case B variant)
+  const [showDefectCountConfig, setShowDefectCountConfig] = useState(false);
+  const [defectiveColumn, setDefectiveColumn] = useState<string>('');
+  const [denominatorColumn, setDenominatorColumn] = useState<string>('');
+  const [denominatorType, setDenominatorType] = useState<'total' | 'non_defective'>('total');
 
   // Sync with analysis when it changes
   useEffect(() => {
     setEditedMappings(analysis.mappings);
     setSelectedCase(analysis.detected_case);
+    
+    // Auto-detect defect count columns from mappings
+    const defectiveMapping = analysis.mappings.find(m => 
+      m.target_role === 'defective_count' || 
+      m.target_role === 'ColumnRole.DEFECTIVE_COUNT'
+    );
+    const totalMapping = analysis.mappings.find(m => 
+      m.target_role === 'total_count' || 
+      m.target_role === 'ColumnRole.TOTAL_COUNT'
+    );
+    const nonDefectiveMapping = analysis.mappings.find(m => 
+      m.target_role === 'non_defective_count' || 
+      m.target_role === 'ColumnRole.NON_DEFECTIVE_COUNT'
+    );
+    
+    if (defectiveMapping) {
+      setDefectiveColumn(defectiveMapping.source_column);
+    }
+    if (totalMapping) {
+      setDenominatorColumn(totalMapping.source_column);
+      setDenominatorType('total');
+    } else if (nonDefectiveMapping) {
+      setDenominatorColumn(nonDefectiveMapping.source_column);
+      setDenominatorType('non_defective');
+    }
   }, [analysis]);
+  
+  // Detect if we need to show defect count configuration
+  const needsDefectCountConfig = useMemo(() => {
+    // Check if Case B (defects_only) is detected with defect counts
+    if (selectedCase !== 'defects_only') return false;
+    
+    const hasDefectiveCount = editedMappings.some(m => 
+      m.target_role === 'defective_count' || 
+      m.target_role === 'ColumnRole.DEFECTIVE_COUNT'
+    );
+    const hasTotalOrNonDefective = editedMappings.some(m => 
+      m.target_role === 'total_count' || 
+      m.target_role === 'ColumnRole.TOTAL_COUNT' ||
+      m.target_role === 'non_defective_count' ||
+      m.target_role === 'ColumnRole.NON_DEFECTIVE_COUNT'
+    );
+    const hasDirectDefects = editedMappings.some(m => 
+      m.target_role === 'defects' || 
+      m.target_role === 'ColumnRole.DEFECTS'
+    );
+    
+    // Show config if we have defect counts detected OR if Case B has no direct defects
+    return (hasDefectiveCount || hasTotalOrNonDefective) || 
+           (!hasDirectDefects && selectedCase === 'defects_only');
+  }, [editedMappings, selectedCase]);
+  
+  // Get available numeric columns for defect count selection
+  const numericColumns = useMemo(() => {
+    return analysis.column_analysis?.filter(col => 
+      col.detected_type === 'integer' || col.detected_type === 'float'
+    ).map(col => col.column) || [];
+  }, [analysis.column_analysis]);
 
   // ============================================
   // HANDLERS
@@ -148,6 +216,53 @@ export default function LLMColumnMapper({
         ? { ...m, target_role: newRole, confidence: 1.0 }
         : m
     ));
+  };
+  
+  // Handle defect count column selection
+  const handleDefectiveColumnChange = (column: string) => {
+    setDefectiveColumn(column);
+    // Update mappings to reflect this selection
+    setEditedMappings(prev => prev.map(m => {
+      if (m.source_column === column) {
+        return { ...m, target_role: 'defective_count', confidence: 1.0, transformation_needed: 'compute_defect_rate' };
+      }
+      // Clear previous defective_count mapping
+      if (m.target_role === 'defective_count' || m.target_role === 'ColumnRole.DEFECTIVE_COUNT') {
+        return { ...m, target_role: 'ignore', confidence: 0.5 };
+      }
+      return m;
+    }));
+  };
+  
+  const handleDenominatorColumnChange = (column: string) => {
+    setDenominatorColumn(column);
+    const targetRole = denominatorType === 'total' ? 'total_count' : 'non_defective_count';
+    // Update mappings to reflect this selection
+    setEditedMappings(prev => prev.map(m => {
+      if (m.source_column === column) {
+        return { ...m, target_role: targetRole, confidence: 1.0, transformation_needed: 'compute_defect_rate' };
+      }
+      // Clear previous total/non_defective mapping
+      if (m.target_role === 'total_count' || m.target_role === 'ColumnRole.TOTAL_COUNT' ||
+          m.target_role === 'non_defective_count' || m.target_role === 'ColumnRole.NON_DEFECTIVE_COUNT') {
+        return { ...m, target_role: 'ignore', confidence: 0.5 };
+      }
+      return m;
+    }));
+  };
+  
+  const handleDenominatorTypeChange = (type: 'total' | 'non_defective') => {
+    setDenominatorType(type);
+    // Update the denominator column mapping if one is selected
+    if (denominatorColumn) {
+      const targetRole = type === 'total' ? 'total_count' : 'non_defective_count';
+      setEditedMappings(prev => prev.map(m => {
+        if (m.source_column === denominatorColumn) {
+          return { ...m, target_role: targetRole, confidence: 1.0 };
+        }
+        return m;
+      }));
+    }
   };
 
   const toggleColumnExpand = (column: string) => {
@@ -174,24 +289,56 @@ export default function LLMColumnMapper({
   const mappedRoles = new Set(editedMappings.filter(m => m.target_role !== 'ignore').map(m => m.target_role));
 
   // Must have supplier
-  if (!mappedRoles.has('supplier')) {
+  if (!mappedRoles.has('supplier') && !mappedRoles.has('ColumnRole.SUPPLIER')) {
     validationErrors.push('Une colonne doit être mappée à "Fournisseur"');
   }
 
   // Case-specific validation
   if (selectedCase === 'delay_only') {
-    if (!mappedRoles.has('date_promised') || !mappedRoles.has('date_delivered')) {
-      if (!mappedRoles.has('delay')) {
+    const hasDatePromised = mappedRoles.has('date_promised') || mappedRoles.has('ColumnRole.DATE_PROMISED');
+    const hasDateDelivered = mappedRoles.has('date_delivered') || mappedRoles.has('ColumnRole.DATE_DELIVERED');
+    const hasDelay = mappedRoles.has('delay') || mappedRoles.has('ColumnRole.DELAY');
+    const hasDelayDirect = mappedRoles.has('delay_direct') || mappedRoles.has('ColumnRole.DELAY_DIRECT');
+    
+    if (!hasDatePromised || !hasDateDelivered) {
+      if (!hasDelay && !hasDelayDirect) {
         validationErrors.push('Case A nécessite des colonnes de dates ou une colonne de retard');
       }
     }
   } else if (selectedCase === 'defects_only') {
-    if (!mappedRoles.has('defects') && !mappedRoles.has('quality_score')) {
-      validationErrors.push('Case B nécessite une colonne de défauts ou de qualité');
+    const hasDefects = mappedRoles.has('defects') || mappedRoles.has('ColumnRole.DEFECTS');
+    const hasQuality = mappedRoles.has('quality_score') || mappedRoles.has('ColumnRole.QUALITY_SCORE');
+    const hasDefectiveCount = mappedRoles.has('defective_count') || mappedRoles.has('ColumnRole.DEFECTIVE_COUNT');
+    const hasTotalCount = mappedRoles.has('total_count') || mappedRoles.has('ColumnRole.TOTAL_COUNT');
+    const hasNonDefective = mappedRoles.has('non_defective_count') || mappedRoles.has('ColumnRole.NON_DEFECTIVE_COUNT');
+    
+    // Valid if: has direct defects, OR has quality score, OR has defective counts with denominator
+    const hasDefectCounts = hasDefectiveCount && (hasTotalCount || hasNonDefective);
+    
+    if (!hasDefects && !hasQuality && !hasDefectCounts) {
+      if (needsDefectCountConfig) {
+        // Specific validation for defect count configuration
+        if (!defectiveColumn) {
+          validationErrors.push('Veuillez sélectionner la colonne des pièces défectueuses');
+        }
+        if (!denominatorColumn) {
+          validationErrors.push('Veuillez sélectionner la colonne du total ou des pièces conformes');
+        }
+      } else {
+        validationErrors.push('Case B nécessite une colonne de défauts, de qualité, ou des comptages de pièces');
+      }
     }
   } else if (selectedCase === 'mixed') {
-    const hasDelayInfo = mappedRoles.has('delay') || (mappedRoles.has('date_promised') && mappedRoles.has('date_delivered'));
-    const hasDefectInfo = mappedRoles.has('defects') || mappedRoles.has('quality_score');
+    const hasDelayInfo = mappedRoles.has('delay') || mappedRoles.has('delay_direct') ||
+      mappedRoles.has('ColumnRole.DELAY') || mappedRoles.has('ColumnRole.DELAY_DIRECT') ||
+      (mappedRoles.has('date_promised') && mappedRoles.has('date_delivered')) ||
+      (mappedRoles.has('ColumnRole.DATE_PROMISED') && mappedRoles.has('ColumnRole.DATE_DELIVERED'));
+    
+    const hasDefectInfo = mappedRoles.has('defects') || mappedRoles.has('quality_score') ||
+      mappedRoles.has('ColumnRole.DEFECTS') || mappedRoles.has('ColumnRole.QUALITY_SCORE') ||
+      (mappedRoles.has('defective_count') && (mappedRoles.has('total_count') || mappedRoles.has('non_defective_count'))) ||
+      (mappedRoles.has('ColumnRole.DEFECTIVE_COUNT') && (mappedRoles.has('ColumnRole.TOTAL_COUNT') || mappedRoles.has('ColumnRole.NON_DEFECTIVE_COUNT')));
+    
     if (!hasDelayInfo || !hasDefectInfo) {
       validationErrors.push('Case C nécessite des données de retard ET de défauts');
     }
@@ -273,6 +420,141 @@ export default function LLMColumnMapper({
           <span className="font-medium">{analysis.recommendation}</span>
         </div>
       </div>
+
+      {/* Defect Count Configuration - Case B Variant */}
+      {needsDefectCountConfig && selectedCase === 'defects_only' && (
+        <div className="p-4 border-b border-gray-200 bg-purple-50">
+          <div className="flex items-center gap-3 mb-4">
+            <Calculator className="w-6 h-6 text-purple-600" />
+            <div>
+              <h3 className="text-lg font-semibold text-purple-900">Configuration du Calcul des Défauts</h3>
+              <p className="text-sm text-purple-700">
+                L'IA a détecté des colonnes de comptage. Le taux de défauts sera calculé automatiquement.
+              </p>
+            </div>
+          </div>
+          
+          {/* Explanation Banner */}
+          <div className="mb-4 p-3 bg-white rounded-lg border border-purple-200">
+            <div className="flex items-start gap-2">
+              <Info className="w-5 h-5 text-purple-500 flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-purple-800">
+                <p className="font-medium mb-1">Comment ça fonctionne :</p>
+                <ul className="list-disc list-inside space-y-1 text-purple-700">
+                  <li>L'IA identifie les colonnes contenant des comptages</li>
+                  <li>Vous confirmez la sélection des colonnes ci-dessous</li>
+                  <li><strong>Le calcul est effectué par le backend Python</strong> (pas par l'IA)</li>
+                  <li>Formule : <code className="bg-purple-100 px-1 rounded">défauts = pièces défectueuses / total</code></li>
+                  <li>Le résultat sera normalisé entre 0 et 1</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Defective Items Column */}
+            <div className="bg-white p-4 rounded-lg border border-purple-200">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                <span className="flex items-center gap-2">
+                  <span className="text-xl">❌</span>
+                  Colonne des pièces défectueuses
+                </span>
+              </label>
+              <select
+                value={defectiveColumn}
+                onChange={(e) => handleDefectiveColumnChange(e.target.value)}
+                className={`w-full px-3 py-2 border rounded-lg ${
+                  defectiveColumn ? 'border-green-500 bg-green-50' : 'border-gray-300'
+                }`}
+              >
+                <option value="">-- Sélectionner une colonne --</option>
+                {numericColumns.map(col => (
+                  <option key={col} value={col} disabled={col === denominatorColumn}>
+                    {col}
+                  </option>
+                ))}
+              </select>
+              {defectiveColumn && (
+                <p className="mt-1 text-xs text-green-600 flex items-center gap-1">
+                  <Check className="w-3 h-3" /> Sélectionné
+                </p>
+              )}
+            </div>
+            
+            {/* Total/Non-Defective Column */}
+            <div className="bg-white p-4 rounded-lg border border-purple-200">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                <span className="flex items-center gap-2">
+                  <span className="text-xl">📊</span>
+                  Colonne de référence (dénominateur)
+                </span>
+              </label>
+              
+              {/* Denominator Type Toggle */}
+              <div className="flex gap-2 mb-2">
+                <button
+                  type="button"
+                  onClick={() => handleDenominatorTypeChange('total')}
+                  className={`flex-1 px-3 py-1.5 text-xs rounded border transition-colors ${
+                    denominatorType === 'total'
+                      ? 'bg-purple-600 text-white border-purple-600'
+                      : 'bg-white text-gray-600 border-gray-300 hover:border-purple-300'
+                  }`}
+                >
+                  Total pièces
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDenominatorTypeChange('non_defective')}
+                  className={`flex-1 px-3 py-1.5 text-xs rounded border transition-colors ${
+                    denominatorType === 'non_defective'
+                      ? 'bg-purple-600 text-white border-purple-600'
+                      : 'bg-white text-gray-600 border-gray-300 hover:border-purple-300'
+                  }`}
+                >
+                  Pièces conformes
+                </button>
+              </div>
+              
+              <select
+                value={denominatorColumn}
+                onChange={(e) => handleDenominatorColumnChange(e.target.value)}
+                className={`w-full px-3 py-2 border rounded-lg ${
+                  denominatorColumn ? 'border-green-500 bg-green-50' : 'border-gray-300'
+                }`}
+              >
+                <option value="">-- Sélectionner une colonne --</option>
+                {numericColumns.map(col => (
+                  <option key={col} value={col} disabled={col === defectiveColumn}>
+                    {col}
+                  </option>
+                ))}
+              </select>
+              {denominatorColumn && (
+                <p className="mt-1 text-xs text-green-600 flex items-center gap-1">
+                  <Check className="w-3 h-3" /> Sélectionné ({denominatorType === 'total' ? 'Total' : 'Conformes'})
+                </p>
+              )}
+            </div>
+          </div>
+          
+          {/* Formula Preview */}
+          {defectiveColumn && denominatorColumn && (
+            <div className="mt-4 p-3 bg-green-50 rounded-lg border border-green-200">
+              <div className="flex items-center gap-2 text-green-800">
+                <Check className="w-5 h-5" />
+                <span className="font-medium">Formule appliquée :</span>
+                <code className="bg-white px-2 py-1 rounded text-sm">
+                  défauts = {defectiveColumn} / {denominatorType === 'total' ? denominatorColumn : `(${defectiveColumn} + ${denominatorColumn})`}
+                </code>
+              </div>
+              <p className="mt-1 text-xs text-green-600">
+                Le calcul sera effectué par le backend Python de manière déterministe et reproductible.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Column Mappings */}
       <div className="p-4">

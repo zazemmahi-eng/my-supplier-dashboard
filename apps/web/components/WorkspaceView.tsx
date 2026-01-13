@@ -889,7 +889,8 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
   ].filter(d => d.value > 0) : [];
 
   const barData = dashboardData?.suppliers?.map(s => ({
-    name: s.supplier?.substring(0, 12),
+    name: s.supplier,
+    fullName: s.supplier,
     score: s.score_risque,
     fill: COLORS[s.status as keyof typeof COLORS] || '#6b7280'
   })) || [];
@@ -901,7 +902,8 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
   // Case C: Both predictions
   // ============================================
   const predictionData = dashboardData?.predictions?.map(p => ({
-    name: p.supplier?.substring(0, 10),
+    name: p.supplier,
+    fullName: p.supplier,
     // Only include non-null values based on case type
     defauts: p.predicted_defect,
     retards: p.predicted_delay
@@ -910,8 +912,9 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
   // Multi-model comparison data - includes all 3 model predictions for each supplier
   // Used when multiModelMode is enabled for side-by-side comparison
   const multiModelPredictionData = dashboardData?.predictions?.map(p => ({
-    name: p.supplier?.substring(0, 10),
+    name: p.supplier,
     supplier: p.supplier,
+    fullName: p.supplier,
     // Combined (average of all 3) - only include non-null values
     defauts_combined: p.predicted_defect,
     retards_combined: p.predicted_delay,
@@ -2208,12 +2211,20 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
               {/* Risk Scores Bar */}
               <div className="bg-white rounded-xl p-6 shadow">
                 <h3 className="font-semibold text-gray-900 mb-4">Scores de Risque</h3>
-                <ResponsiveContainer width="100%" height={250}>
-                  <BarChart data={barData}>
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={barData} margin={{ top: 20, right: 30, left: 20, bottom: 80 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                    <XAxis 
+                      dataKey="name" 
+                      tick={{ fontSize: 10, angle: -45, textAnchor: 'end' }}
+                      interval={0}
+                      height={80}
+                    />
                     <YAxis domain={[0, 100]} />
-                    <Tooltip />
+                    <Tooltip 
+                      formatter={(value: number) => [`${value}`, 'Score de risque']}
+                      labelFormatter={(label) => `Fournisseur: ${label}`}
+                    />
                     <Bar dataKey="score" name="Score">
                       {barData.map((entry, index) => (
                         <Cell key={index} fill={entry.fill} />
@@ -2661,11 +2672,18 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                   </span>
                 </h3>
                 <ResponsiveContainer width="100%" height={400}>
-                  <LineChart data={predictionData}>
+                  <LineChart data={predictionData} margin={{ top: 20, right: 30, left: 20, bottom: 80 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                    <XAxis 
+                      dataKey="name" 
+                      tick={{ fontSize: 10, angle: -45, textAnchor: 'end' }}
+                      interval={0}
+                      height={80}
+                    />
                     <YAxis />
-                    <Tooltip />
+                    <Tooltip 
+                      labelFormatter={(label) => `Fournisseur: ${label}`}
+                    />
                     <Legend />
                     {/* Only show defects line if case supports it */}
                     {showDefects && (
@@ -2692,10 +2710,15 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                   <h3 className="font-semibold text-gray-900 mb-4">
                     Comparaison des Prédictions de Défauts (%)
                   </h3>
-                  <ResponsiveContainer width="100%" height={350}>
-                    <BarChart data={multiModelPredictionData} barCategoryGap="15%">
+                  <ResponsiveContainer width="100%" height={400}>
+                    <BarChart data={multiModelPredictionData} barCategoryGap="15%" margin={{ top: 20, right: 30, left: 20, bottom: 80 }}>
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                      <XAxis 
+                        dataKey="name" 
+                        tick={{ fontSize: 10, angle: -45, textAnchor: 'end' }}
+                        interval={0}
+                        height={80}
+                      />
                       <YAxis />
                       <Tooltip 
                         content={({ active, payload, label }) => {
@@ -2735,10 +2758,15 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                   <h3 className="font-semibold text-gray-900 mb-4">
                     Comparaison des Prédictions de Retards (jours)
                   </h3>
-                  <ResponsiveContainer width="100%" height={350}>
-                    <BarChart data={multiModelPredictionData} barCategoryGap="15%">
+                  <ResponsiveContainer width="100%" height={400}>
+                    <BarChart data={multiModelPredictionData} barCategoryGap="15%" margin={{ top: 20, right: 30, left: 20, bottom: 80 }}>
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                      <XAxis 
+                        dataKey="name" 
+                        tick={{ fontSize: 10, angle: -45, textAnchor: 'end' }}
+                        interval={0}
+                        height={80}
+                      />
                       <YAxis />
                       <Tooltip 
                         content={({ active, payload, label }) => {

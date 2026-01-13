@@ -783,7 +783,13 @@ async def upload_dataset(
 class ColumnMappingRequest(BaseModel):
     """Schema for approving/editing column mappings"""
     source_column: str
-    target_role: str  # supplier, date_promised, date_delivered, order_date, delay, defects, quality_score, ignore
+    # Supported target roles:
+    # - supplier, date_promised, date_delivered, order_date
+    # - delay, delay_direct (direct delay value, no date computation)
+    # - defects, quality_score
+    # - defective_count, total_count, non_defective_count (for computed defects)
+    # - ignore
+    target_role: str
     confidence: float = 1.0
     transformation_needed: Optional[str] = None
 

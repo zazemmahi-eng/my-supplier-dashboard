@@ -1,0 +1,10 @@
+supplier,defective_items,good_items
+Supplier A,5,95
+Supplier A,2,48
+Supplier A,10,190
+Supplier B,15,285
+Supplier B,8,92
+Supplier B,3,72
+Supplier C,0,100
+Supplier C,1,49
+Supplier C,12,388

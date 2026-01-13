@@ -46,8 +46,12 @@ class ColumnRole(str, Enum):
     DATE_DELIVERED = "date_delivered"
     ORDER_DATE = "order_date"
     DELAY = "delay"
+    DELAY_DIRECT = "delay_direct"  # Direct delay value (no date computation needed)
     DEFECTS = "defects"
     QUALITY_SCORE = "quality_score"
+    DEFECTIVE_COUNT = "defective_count"  # Number of defective items
+    TOTAL_COUNT = "total_count"  # Total number of items
+    NON_DEFECTIVE_COUNT = "non_defective_count"  # Number of non-defective items
     IGNORE = "ignore"
 
 
@@ -149,9 +153,36 @@ class LLMColumnAnalyzer:
         r'jours_retard', r'ecart'
     ]
     
+    # Direct delay patterns - when delay is provided as a value, not computed from dates
+    DELAY_DIRECT_PATTERNS = [
+        r'^delay$', r'^delay_days$', r'^delai$', r'^retard$', r'^late_days$',
+        r'^jours_retard$', r'^days_late$', r'^delivery_delay$', r'^retard_livraison$',
+        r'^retard_jours$', r'^jour_retard$', r'^nb_jours_retard$'
+    ]
+    
     DEFECTS_PATTERNS = [
         r'defect', r'defaut', r'fault', r'error', r'issue',
         r'problem', r'reject', r'failure', r'taux_defaut'
+    ]
+    
+    # Defective count patterns - for computing defect rate from counts
+    DEFECTIVE_COUNT_PATTERNS = [
+        r'defective_items', r'defective_count', r'nb_defectueux', r'items_defectueux',
+        r'defective', r'defects_count', r'nombre_defauts', r'qty_defective',
+        r'defectueux', r'articles_defectueux', r'units_defective'
+    ]
+    
+    # Total count patterns - for computing defect rate
+    TOTAL_COUNT_PATTERNS = [
+        r'total_items', r'total_count', r'total', r'nb_total', r'items_total',
+        r'quantity', r'qty', r'quantite', r'nombre_total', r'total_units',
+        r'units_total', r'batch_size', r'lot_size'
+    ]
+    
+    # Non-defective count patterns - alternative to total count
+    NON_DEFECTIVE_COUNT_PATTERNS = [
+        r'non_defective', r'good_items', r'conformes', r'items_conformes',
+        r'articles_conformes', r'units_good', r'qty_good', r'ok_count'
     ]
     
     QUALITY_PATTERNS = [
@@ -238,15 +269,46 @@ The target columns we need are:
 - date_delivered: Actual delivery date - synonyms: date_livraison, date_reelle, received
 - order_date: When order was placed - synonyms: date_commande, purchase_date
 - delay: Number of days late (positive = late, negative = early) - synonyms: retard, days_late
+- delay_direct: DIRECT delay value in days (when delay is already provided, NOT computed from dates)
+  - Use this when the column contains integer delay values like "5", "0", "3"
+  - Synonyms: delay_days, late_days, retard_jours, jours_retard, nb_jours_retard
+  - IMPORTANT: If delay is provided directly, do NOT request date_promised or date_delivered
 - defects: Defect rate as decimal 0-1 (e.g., 0.05 = 5% defects) - synonyms: defaut, taux_defaut
 - quality_score: Quality score (will be converted: defects = 1 - quality_score/100) - synonyms: qualite
+- defective_count: NUMBER of defective items (for computing defect rate)
+  - Synonyms: defective_items, nb_defectueux, items_defectueux, defects_count
+  - IMPORTANT: If found, look for total_count or non_defective_count to compute defect rate
+- total_count: TOTAL number of items in batch (for computing defect rate)
+  - Synonyms: total_items, total, quantity, qty, quantite, batch_size
+  - Formula will be: defects = defective_count / total_count
+- non_defective_count: Number of NON-defective/good items
+  - Synonyms: good_items, conformes, items_conformes
+  - If total_count not available, use: total = defective_count + non_defective_count
 - ignore: Column not needed for analysis
+
+SPECIAL DETECTION RULES:
+1. DIRECT DELAY: If you see a column like "delay", "delay_days", "late_days", "retard" with INTEGER values,
+   map it to "delay_direct" (NOT "delay"). This means delay is already computed.
+   In this case, date columns are OPTIONAL.
+
+2. DEFECTS FROM COUNTS: If you see columns like "defective_items" AND "total_items",
+   map them to "defective_count" and "total_count" respectively.
+   Add in reasoning: "Defect rate can be computed as: defective_count / total_count"
+   Set transformation_needed to "compute_defect_rate"
+
+3. If you see "non_defective" or "good_items" instead of total:
+   Map to "non_defective_count" and note: "Total = defective + non_defective"
 
 For each column, provide:
 1. target_role: One of the target columns above
 2. confidence: 0.0-1.0 confidence score
-3. reasoning: Brief explanation
-4. transformation_needed: null or one of: "parse_date", "convert_percentage_to_decimal", "convert_quality_to_defects"
+3. reasoning: Brief explanation (MUST mention if computed field is needed)
+4. transformation_needed: null or one of:
+   - "parse_date"
+   - "convert_percentage_to_decimal"
+   - "convert_quality_to_defects"
+   - "compute_defect_rate" (when defective_count/total_count detected)
+   - "use_direct_delay" (when delay_direct detected)
 
 CSV Columns to analyze:
 """
@@ -262,13 +324,18 @@ Respond with ONLY valid JSON in this exact format:
   "mappings": [
     {
       "source_column": "column_name",
-      "target_role": "supplier|date_promised|date_delivered|order_date|delay|defects|quality_score|ignore",
+      "target_role": "supplier|date_promised|date_delivered|order_date|delay|delay_direct|defects|quality_score|defective_count|total_count|non_defective_count|ignore",
       "confidence": 0.95,
       "reasoning": "Brief explanation",
       "transformation_needed": null
     }
   ],
-  "detected_case": "delay_only|defects_only|mixed|unknown"
+  "detected_case": "delay_only|defects_only|mixed|unknown",
+  "computed_fields": {
+    "delay_source": "direct|computed|none",
+    "defects_source": "direct|from_counts|from_quality|none",
+    "formula_suggestion": "Optional formula like: defects = defective_count / total_count"
+  }
 }"""
         
         try:
@@ -451,10 +518,72 @@ Respond with ONLY valid JSON in this exact format:
         """
         Suggest a mapping for a single column.
         Uses pattern matching on column name and content analysis.
+        Extended to support direct delay values and defect counts.
         """
         col_lower = column_name.lower().strip()
         
-        # Check each pattern category
+        best_match = None
+        best_confidence = 0.0
+        best_reasoning = ""
+        transformation = None
+        
+        # PRIORITY 1: Check for DIRECT DELAY patterns first (higher priority than generic delay)
+        for pattern in self.DELAY_DIRECT_PATTERNS:
+            if re.search(pattern, col_lower):
+                if detected_type in ["integer", "float"]:
+                    return ColumnMapping(
+                        source_column=column_name,
+                        target_role=ColumnRole.DELAY_DIRECT,
+                        confidence=0.95,
+                        reasoning=f"Direct delay value detected (pattern: '{pattern}'). No date computation needed.",
+                        sample_values=sample_values[:5],
+                        detected_type=detected_type,
+                        transformation_needed="use_direct_delay"
+                    )
+        
+        # PRIORITY 2: Check for DEFECTIVE COUNT patterns
+        for pattern in self.DEFECTIVE_COUNT_PATTERNS:
+            if re.search(pattern, col_lower):
+                if detected_type in ["integer", "float"]:
+                    return ColumnMapping(
+                        source_column=column_name,
+                        target_role=ColumnRole.DEFECTIVE_COUNT,
+                        confidence=0.95,
+                        reasoning=f"Defective item count detected. Use with total_count to compute defect rate.",
+                        sample_values=sample_values[:5],
+                        detected_type=detected_type,
+                        transformation_needed="compute_defect_rate"
+                    )
+        
+        # PRIORITY 3: Check for TOTAL COUNT patterns
+        for pattern in self.TOTAL_COUNT_PATTERNS:
+            if re.search(pattern, col_lower):
+                if detected_type in ["integer", "float"]:
+                    return ColumnMapping(
+                        source_column=column_name,
+                        target_role=ColumnRole.TOTAL_COUNT,
+                        confidence=0.90,
+                        reasoning=f"Total item count detected. Use with defective_count for defect rate.",
+                        sample_values=sample_values[:5],
+                        detected_type=detected_type,
+                        transformation_needed="compute_defect_rate"
+                    )
+        
+        # PRIORITY 4: Check for NON-DEFECTIVE COUNT patterns
+        for pattern in self.NON_DEFECTIVE_COUNT_PATTERNS:
+            if re.search(pattern, col_lower):
+                if detected_type in ["integer", "float"]:
+                    return ColumnMapping(
+                        source_column=column_name,
+                        target_role=ColumnRole.NON_DEFECTIVE_COUNT,
+                        confidence=0.90,
+                        reasoning=f"Non-defective item count detected. Total = defective + non_defective.",
+                        sample_values=sample_values[:5],
+                        detected_type=detected_type,
+                        transformation_needed="compute_defect_rate"
+                    )
+        
+        # Check standard pattern categories
         patterns_to_check = [
             (self.SUPPLIER_PATTERNS, ColumnRole.SUPPLIER, "string"),
             (self.DATE_PROMISED_PATTERNS, ColumnRole.DATE_PROMISED, "date"),
@@ -464,11 +593,6 @@ Respond with ONLY valid JSON in this exact format:
             (self.DEFECTS_PATTERNS, ColumnRole.DEFECTS, ["integer", "float"]),
             (self.QUALITY_PATTERNS, ColumnRole.QUALITY_SCORE, ["integer", "float"]),
         ]
-        
-        best_match = None
-        best_confidence = 0.0
-        best_reasoning = ""
-        transformation = None
         
         for patterns, role, expected_types in patterns_to_check:
             if isinstance(expected_types, str):
@@ -547,24 +671,37 @@ Respond with ONLY valid JSON in this exact format:
         return (ColumnRole.IGNORE, 0.2, "Could not determine column role", None)
     
     def _detect_case(self, mappings: List[ColumnMapping]) -> str:
-        """Determine which data case (A, B, C) this data supports"""
+        """
+        Determine which data case (A, B, C) this data supports.
+        Extended to support direct delay and defect counts.
+        """
         roles = {m.target_role for m in mappings if m.confidence > 0.5}
         
-        has_dates = (ColumnRole.DATE_PROMISED in roles and ColumnRole.DATE_DELIVERED in roles) or \
-                    ColumnRole.DELAY in roles
-        has_defects = ColumnRole.DEFECTS in roles or ColumnRole.QUALITY_SCORE in roles
+        # Check for delay data - either from dates, computed delay, or direct delay
+        has_dates = (ColumnRole.DATE_PROMISED in roles and ColumnRole.DATE_DELIVERED in roles)
+        has_delay = ColumnRole.DELAY in roles or ColumnRole.DELAY_DIRECT in roles
+        has_delay_data = has_dates or has_delay
         
-        if has_dates and has_defects:
+        # Check for defects data - either direct, from quality score, or from counts
+        has_defects_direct = ColumnRole.DEFECTS in roles or ColumnRole.QUALITY_SCORE in roles
+        has_defects_counts = (ColumnRole.DEFECTIVE_COUNT in roles and 
+                             (ColumnRole.TOTAL_COUNT in roles or ColumnRole.NON_DEFECTIVE_COUNT in roles))
+        has_defects_data = has_defects_direct or has_defects_counts
+        
+        if has_delay_data and has_defects_data:
             return "mixed"
-        elif has_dates:
+        elif has_delay_data:
             return "delay_only"
-        elif has_defects:
+        elif has_defects_data:
             return "defects_only"
         else:
             return "unknown"
     
     def _check_mapping_issues(self, mappings: List[ColumnMapping], detected_case: str) -> List[Dict]:
-        """Check for potential issues with the mappings"""
+        """
+        Check for potential issues with the mappings.
+        Extended to validate direct delay and defect count scenarios.
+        """
         issues = []
         roles_found = {m.target_role: m for m in mappings if m.confidence > 0.5}
         
@@ -575,20 +712,55 @@ Respond with ONLY valid JSON in this exact format:
                 "message": "No supplier column identified. Please map a column to 'supplier'."
             })
         
-        # Case-specific checks
+        # Case-specific checks for delay_only
         if detected_case == "delay_only":
-            if ColumnRole.DATE_PROMISED not in roles_found and ColumnRole.DATE_DELIVERED not in roles_found:
-                if ColumnRole.DELAY not in roles_found:
-                    issues.append({
-                        "severity": "error",
-                        "message": "Delay case requires either date columns or a delay column."
-                    })
-        
-        elif detected_case == "defects_only":
-            if ColumnRole.DEFECTS not in roles_found and ColumnRole.QUALITY_SCORE not in roles_found:
+            has_dates = (ColumnRole.DATE_PROMISED in roles_found and 
+                        ColumnRole.DATE_DELIVERED in roles_found)
+            has_delay = ColumnRole.DELAY in roles_found
+            has_delay_direct = ColumnRole.DELAY_DIRECT in roles_found
+            
+            if not has_dates and not has_delay and not has_delay_direct:
                 issues.append({
                     "severity": "error",
-                    "message": "Defects case requires either defects or quality_score column."
+                    "message": "Delay case requires either date columns (date_promised + date_delivered), a delay column, or direct delay values."
+                })
+            
+            # Info message when using direct delay
+            if has_delay_direct and not has_dates:
+                issues.append({
+                    "severity": "info",
+                    "message": "✓ Direct delay values detected. Date columns are not required."
+                })
+        
+        # Case-specific checks for defects_only
+        elif detected_case == "defects_only":
+            has_defects = ColumnRole.DEFECTS in roles_found
+            has_quality = ColumnRole.QUALITY_SCORE in roles_found
+            has_defective_count = ColumnRole.DEFECTIVE_COUNT in roles_found
+            has_total = ColumnRole.TOTAL_COUNT in roles_found
+            has_non_defective = ColumnRole.NON_DEFECTIVE_COUNT in roles_found
+            
+            can_compute_defects = has_defective_count and (has_total or has_non_defective)
+            
+            if not has_defects and not has_quality and not can_compute_defects:
+                issues.append({
+                    "severity": "error",
+                    "message": "Defects case requires: defects column, quality_score column, OR defective_count with total_count/non_defective_count."
+                })
+            
+            # Info message when computing from counts
+            if can_compute_defects and not has_defects:
+                formula = "defective_count / total_count" if has_total else "defective_count / (defective_count + non_defective_count)"
+                issues.append({
+                    "severity": "info",
+                    "message": f"✓ Defect rate will be computed as: {formula}"
+                })
+            
+            # Warning if defective count found but no denominator
+            if has_defective_count and not has_total and not has_non_defective:
+                issues.append({
+                    "severity": "warning",
+                    "message": "Defective count detected but no total_count or non_defective_count. Cannot compute defect rate."
                 })
         
         # Check for low confidence mappings
@@ -598,6 +770,8 @@ Respond with ONLY valid JSON in this exact format:
                 "severity": "warning",
                 "message": f"{len(low_confidence)} column(s) have uncertain mappings. Please review."
             })
+        
+        return issues
         
         return issues
     
@@ -660,6 +834,10 @@ class DataNormalizer:
         """
         Apply all transformations based on the approved mappings.
         
+        Extended to support:
+        - Direct delay values (no date computation)
+        - Defect rate computation from counts
+        
         Args:
             df: Input DataFrame
             mappings: List of approved column mappings
@@ -677,13 +855,13 @@ class DataNormalizer:
             # Step 1: Apply column mappings
             result_df = self._apply_mappings(df, mappings)
             
-            # Step 2: Parse and normalize dates
+            # Step 2: Parse and normalize dates (if present)
             result_df = self._normalize_dates(result_df)
             
-            # Step 3: Compute delay if needed
-            result_df = self._compute_delay(result_df, target_case)
+            # Step 3: Handle delay - direct values OR computed from dates
+            result_df = self._compute_delay(result_df, target_case, mappings)
             
-            # Step 4: Normalize defects
+            # Step 4: Handle defects - direct values, from quality, OR from counts
             result_df = self._normalize_defects(result_df, mappings, target_case)
             
             # Step 5: Clean supplier names
@@ -731,7 +909,16 @@ class DataNormalizer:
             source_col = mapping["source_column"]
             target_role = mapping["target_role"]
             
-            if target_role == "ignore" or target_role == ColumnRole.IGNORE:
+            # Handle different formats of target_role
+            if isinstance(target_role, ColumnRole):
+                target_role_value = target_role.value
+            elif isinstance(target_role, str):
+                target_role_value = target_role
+            else:
+                target_role_value = str(target_role)
+            
+            # Skip ignored columns
+            if target_role_value == "ignore" or target_role == ColumnRole.IGNORE:
                 continue
             
             if source_col not in df.columns:
@@ -742,14 +929,13 @@ class DataNormalizer:
                 ))
                 continue
             
-            # Map to standard column name
-            target_col = target_role if isinstance(target_role, str) else target_role.value
-            result[target_col] = df[source_col].copy()
+            # Map to standard column name (use the value, not the enum)
+            result[target_role_value] = df[source_col].copy()
             
             self.transformations.append(TransformationLog(
-                column=target_col,
+                column=target_role_value,
                 action="column_mapping",
-                details=f"Mapped '{source_col}' to '{target_col}'",
+                details=f"Mapped '{source_col}' to '{target_role_value}'",
                 rows_affected=len(df)
             ))
         
@@ -805,35 +991,92 @@ class DataNormalizer:
         
         return df
     
-    def _compute_delay(self, df: pd.DataFrame, target_case: str) -> pd.DataFrame:
-        """Compute delay from dates if not present"""
+    def _compute_delay(self, df: pd.DataFrame, target_case: str, 
+                        mappings: List[Dict] = None) -> pd.DataFrame:
+        """
+        Compute or use delay values.
         
-        # Skip if delay already exists and is valid
-        if 'delay' in df.columns:
+        PRIORITY ORDER (deterministic):
+        1. Use delay_direct if present (direct delay value from CSV)
+        2. Use existing delay column if present
+        3. Compute from date_promised and date_delivered
+        4. Set to 0 for defects_only case
+        
+        All delay values are validated to be non-negative integers.
+        """
+        mappings = mappings or []
+        
+        # Check if we have direct delay from mappings
+        has_delay_direct = 'delay_direct' in df.columns
+        has_delay = 'delay' in df.columns
+        has_dates = 'date_promised' in df.columns and 'date_delivered' in df.columns
+        
+        # CASE 1: Direct delay value provided (highest priority)
+        if has_delay_direct:
+            df['delay'] = pd.to_numeric(df['delay_direct'], errors='coerce').fillna(0)
+            # Ensure non-negative integers
+            df['delay'] = df['delay'].apply(lambda x: int(max(0, x)))
+            
+            # Validate: delay must be non-negative
+            invalid_count = (df['delay'] < 0).sum()
+            if invalid_count > 0:
+                self.warnings.append(ValidationWarning(
+                    severity="warning",
+                    message=f"{invalid_count} negative delay values were set to 0",
+                    column='delay',
+                    row_count=invalid_count
+                ))
+            
+            self.transformations.append(TransformationLog(
+                column='delay',
+                action="direct_delay_used",
+                details="Used direct delay values from CSV (no date computation needed)",
+                rows_affected=len(df)
+            ))
+            
+            # Remove the intermediate column
+            df = df.drop(columns=['delay_direct'], errors='ignore')
+            
+            # Create placeholder dates for compatibility if not present
+            if 'date_promised' not in df.columns:
+                df['date_promised'] = pd.Timestamp.now()
+                df['date_delivered'] = pd.Timestamp.now()
+                self.transformations.append(TransformationLog(
+                    column='date_promised',
+                    action="date_placeholder",
+                    details="Created placeholder dates (delay was provided directly)",
+                    rows_affected=len(df)
+                ))
+            
+            return df
+        
+        # CASE 2: Existing delay column
+        if has_delay:
             df['delay'] = pd.to_numeric(df['delay'], errors='coerce').fillna(0)
-            df['delay'] = df['delay'].apply(lambda x: max(0, x))
+            df['delay'] = df['delay'].apply(lambda x: int(max(0, x)))
             self.transformations.append(TransformationLog(
                 column='delay',
                 action="delay_validation",
-                details="Validated existing delay column, set negatives to 0",
+                details="Validated existing delay column, ensured non-negative integers",
                 rows_affected=len(df)
             ))
             return df
         
-        # Compute from dates if available
-        if 'date_promised' in df.columns and 'date_delivered' in df.columns:
+        # CASE 3: Compute from dates
+        if has_dates:
             df['delay'] = (df['date_delivered'] - df['date_promised']).dt.days
-            df['delay'] = df['delay'].apply(lambda x: max(0, x) if pd.notna(x) else 0)
+            df['delay'] = df['delay'].apply(lambda x: int(max(0, x)) if pd.notna(x) else 0)
             
             self.transformations.append(TransformationLog(
                 column='delay',
                 action="delay_computation",
-                details="Computed delay as (date_delivered - date_promised) in days",
+                details="Computed delay as (date_delivered - date_promised) in days, minimum 0",
                 rows_affected=len(df)
             ))
+            return df
         
-        # For defects_only case, set delay to 0
-        elif target_case == "defects_only":
+        # CASE 4: Defects-only case - set delay to 0
+        if target_case == "defects_only":
             df['delay'] = 0
             self.transformations.append(TransformationLog(
                 column='delay',
@@ -863,13 +1106,40 @@ class DataNormalizer:
     
     def _normalize_defects(self, df: pd.DataFrame, mappings: List[Dict], 
                            target_case: str) -> pd.DataFrame:
-        """Normalize defects to 0-1 range"""
+        """
+        Normalize defects to 0-1 range.
         
-        # Check if we have quality_score that needs conversion
+        PRIORITY ORDER (deterministic):
+        1. Compute from defective_count + total_count (if both present)
+        2. Compute from defective_count + non_defective_count (if both present)
+        3. Convert from quality_score (if present)
+        4. Normalize existing defects column
+        5. Set to 0 for delay-only case
+        
+        All computations are performed by DETERMINISTIC Python code.
+        The LLM only suggests which columns to use - never performs calculations.
+        """
+        # Check what columns we have
+        has_defective_count = 'defective_count' in df.columns
+        has_total_count = 'total_count' in df.columns
+        has_non_defective_count = 'non_defective_count' in df.columns
         has_quality = 'quality_score' in df.columns
         has_defects = 'defects' in df.columns
         
-        if has_quality and not has_defects:
+        # CASE 1: Compute from defective_count + total_count
+        if has_defective_count and has_total_count:
+            df = self._compute_defects_from_counts(df, 'defective_count', 'total_count', 'total')
+            # Remove intermediate columns
+            df = df.drop(columns=['defective_count', 'total_count'], errors='ignore')
+        
+        # CASE 2: Compute from defective_count + non_defective_count
+        elif has_defective_count and has_non_defective_count:
+            df = self._compute_defects_from_counts(df, 'defective_count', 'non_defective_count', 'non_defective')
+            # Remove intermediate columns
+            df = df.drop(columns=['defective_count', 'non_defective_count'], errors='ignore')
+        
+        # CASE 3: Convert from quality_score
+        elif has_quality and not has_defects:
             # Convert quality score (0-100) to defects (0-1)
             quality = pd.to_numeric(df['quality_score'], errors='coerce').fillna(100)
             
@@ -890,6 +1160,7 @@ class DataNormalizer:
                 rows_affected=len(df)
             ))
         
+        # CASE 4: Normalize existing defects
         elif has_defects:
             # Normalize existing defects
             defects = pd.to_numeric(df['defects'], errors='coerce').fillna(0)
@@ -910,7 +1181,7 @@ class DataNormalizer:
                 rows_affected=len(df)
             ))
         
-        # For delay_only case, set defects to 0
+        # CASE 5: Delay-only case - set defects to 0
         elif target_case == "delay_only":
             df['defects'] = 0.0
             self.transformations.append(TransformationLog(
@@ -934,6 +1205,77 @@ class DataNormalizer:
                 column='defects',
                 row_count=invalid_defects
             ))
+        
+        return df
+    
+    def _compute_defects_from_counts(self, df: pd.DataFrame, 
+                                      defective_col: str, 
+                                      denominator_col: str,
+                                      denominator_type: str) -> pd.DataFrame:
+        """
+        DETERMINISTIC computation of defect rate from counts.
+        
+        This is pure Python/Pandas code - NO LLM involvement.
+        
+        Formula (when denominator_type == 'total'):
+            defects = defective_count / total_count
+        
+        Formula (when denominator_type == 'non_defective'):
+            defects = defective_count / (defective_count + non_defective_count)
+        
+        Args:
+            df: Input DataFrame
+            defective_col: Column name for defective item count
+            denominator_col: Column name for total or non-defective count
+            denominator_type: 'total' or 'non_defective'
+            
+        Returns:
+            DataFrame with computed 'defects' column (normalized 0-1)
+        """
+        # Convert to numeric, handling errors
+        defective = pd.to_numeric(df[defective_col], errors='coerce').fillna(0)
+        denominator = pd.to_numeric(df[denominator_col], errors='coerce').fillna(0)
+        
+        # Ensure non-negative values
+        defective = defective.clip(lower=0)
+        denominator = denominator.clip(lower=0)
+        
+        if denominator_type == 'total':
+            # Formula: defects = defective_count / total_count
+            total = denominator
+            formula_desc = "defective_count / total_count"
+        else:
+            # Formula: defects = defective_count / (defective_count + non_defective_count)
+            total = defective + denominator
+            formula_desc = "defective_count / (defective_count + non_defective_count)"
+        
+        # Compute defect rate, handling division by zero
+        with np.errstate(divide='ignore', invalid='ignore'):
+            defects = np.where(total > 0, defective / total, 0.0)
+        
+        # Normalize to [0, 1] range
+        df['defects'] = pd.Series(defects, index=df.index).clip(0, 1)
+        
+        # Log statistics
+        valid_rows = (total > 0).sum()
+        zero_total_rows = (total == 0).sum()
+        
+        if zero_total_rows > 0:
+            self.warnings.append(ValidationWarning(
+                severity="warning",
+                message=f"{zero_total_rows} rows had zero total items, defect rate set to 0",
+                column='defects',
+                row_count=zero_total_rows
+            ))
+        
+        self.transformations.append(TransformationLog(
+            column='defects',
+            action="defects_computed_from_counts",
+            details=f"Computed defect rate using formula: {formula_desc}. "
+                    f"Processed {valid_rows} valid rows. "
+                    f"Result normalized to [0, 1] range.",
+            rows_affected=len(df)
+        ))
         
         return df
     

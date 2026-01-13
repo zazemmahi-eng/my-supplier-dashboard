@@ -1,0 +1,10 @@
+supplier,defective_items,total_items
+Supplier A,5,100
+Supplier A,2,50
+Supplier A,10,200
+Supplier B,15,300
+Supplier B,8,100
+Supplier B,3,75
+Supplier C,0,100
+Supplier C,1,50
+Supplier C,12,400

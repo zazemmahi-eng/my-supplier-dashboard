@@ -32,8 +32,17 @@ export const generateRootMetadata = async (): Promise<Metadata> => {
       description: appConfig.description,
     },
     icons: {
-      icon: '/images/favicon/favicon.ico',
-      apple: '/images/favicon/apple-touch-icon.png',
+      icon: [
+        { url: '/images/logo.png', sizes: '16x16', type: 'image/png' },
+        { url: '/images/logo.png', sizes: '32x32', type: 'image/png' },
+        { url: '/images/logo.png', sizes: '48x48', type: 'image/png' },
+        { url: '/images/logo.png', sizes: '64x64', type: 'image/png' },
+        { url: '/images/logo.png', sizes: '128x128', type: 'image/png' },
+      ],
+      apple: [
+        { url: '/images/logo.png', sizes: '180x180', type: 'image/png' },
+      ],
+      shortcut: '/images/logo.png',
     },
   };
 };
