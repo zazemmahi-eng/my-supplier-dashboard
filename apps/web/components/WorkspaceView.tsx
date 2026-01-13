@@ -7,21 +7,37 @@
  * visualization, and report export.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts';
 import {
-  Upload, ArrowLeft, Database, Settings, FileText, Download,
+  ArrowLeft, Database, Settings, FileText, Download,
   AlertCircle, CheckCircle, TrendingUp, TrendingDown, Activity,
   BarChart3, PieChart as PieChartIcon, Filter, Plus, X, Trash2,
-  Zap, RefreshCw, FileSpreadsheet, Table, Users, FileDown
+  RefreshCw, FileSpreadsheet, Table, FileDown
 } from 'lucide-react';
-import LLMColumnMapper from './LLMColumnMapper';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_SUPPLIER_API_URL ?? 'http://127.0.0.1:8000';
+
+// ============================================
+// CLIENT-ONLY TIME COMPONENT (prevents hydration mismatch)
+// ============================================
+function ClientOnlyTime() {
+  const [time, setTime] = useState<string | null>(null);
+  
+  useEffect(() => {
+    setTime(new Date().toLocaleTimeString('fr-FR'));
+  }, []);
+  
+  return (
+    <p className="text-gray-500">
+      Dernière mise à jour: {time ?? '...'}
+    </p>
+  );
+}
 
 // ============================================
 // TYPE DEFINITIONS
@@ -148,8 +164,6 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
 
   // UI state - default to 'setup' tab (metadata view) instead of 'overview'
   const [activeTab, setActiveTab] = useState<'setup' | 'overview' | 'predictions' | 'models' | 'kpis' | 'export'>('setup');
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
   
   // Filter state
   const [selectedSupplier, setSelectedSupplier] = useState<string>('all');
@@ -181,13 +195,6 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
     target_field: 'defects',
     unit: '%'
   });
-
-  // LLM Column Mapping state - for intelligent CSV ingestion
-  const [showLLMMapper, setShowLLMMapper] = useState(false);
-  const [llmAnalysis, setLLMAnalysis] = useState<any>(null);
-  const [llmCsvContent, setLLMCsvContent] = useState<string>('');
-  const [llmFilename, setLLMFilename] = useState<string>('');
-  const [applyingMappings, setApplyingMappings] = useState(false);
 
   // Export state
   const [exportLoading, setExportLoading] = useState(false);
@@ -265,132 +272,6 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
   // ============================================
   // ACTIONS
   // ============================================
-
-  // Standard file upload (original method)
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    if (!file.name.endsWith('.csv')) {
-      setUploadError('Format invalide. Veuillez uploader un fichier CSV.');
-      return;
-    }
-
-    setUploading(true);
-    setUploadError(null);
-
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      await axios.post(`${API_BASE_URL}/api/workspaces/${workspaceId}/upload`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
-
-      // Refresh data
-      await fetchWorkspaceInfo();
-      await fetchDashboardData();
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        const detail = err.response?.data?.detail;
-        if (typeof detail === 'object' && detail.errors) {
-          setUploadError(detail.errors.join('\n'));
-        } else {
-          setUploadError(detail || 'Erreur lors du téléchargement');
-        }
-      } else {
-        setUploadError('Erreur inconnue');
-      }
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  // Smart upload with LLM-based column mapping
-  // Step 1: Analyze the CSV and show mapping suggestions
-  const handleSmartUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    if (!file.name.endsWith('.csv')) {
-      setUploadError('Format invalide. Veuillez uploader un fichier CSV.');
-      return;
-    }
-
-    setUploading(true);
-    setUploadError(null);
-
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      // Call the analyze endpoint
-      const response = await axios.post(
-        `${API_BASE_URL}/api/workspaces/${workspaceId}/upload/analyze`, 
-        formData,
-        { headers: { 'Content-Type': 'multipart/form-data' } }
-      );
-
-      // Store analysis results and show mapper
-      setLLMAnalysis(response.data.analysis);
-      setLLMCsvContent(response.data.csv_content);
-      setLLMFilename(response.data.filename || file.name);
-      setShowLLMMapper(true);
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        const detail = err.response?.data?.detail;
-        setUploadError(typeof detail === 'string' ? detail : 'Erreur lors de l\'analyse');
-      } else {
-        setUploadError('Erreur inconnue');
-      }
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  // Step 2: Apply user-approved mappings and import data
-  const handleApplyMappings = async (mappings: any[], targetCase: string) => {
-    setApplyingMappings(true);
-    setUploadError(null);
-
-    try {
-      // Build query parameters
-      const params = new URLSearchParams({
-        csv_content: llmCsvContent,
-        mappings: JSON.stringify(mappings),
-        target_case: targetCase,
-        filename: llmFilename
-      });
-
-      const response = await axios.post(
-        `${API_BASE_URL}/api/workspaces/${workspaceId}/upload/apply-mappings?${params.toString()}`
-      );
-
-      if (response.data.success) {
-        // Close mapper and refresh
-        setShowLLMMapper(false);
-        setLLMAnalysis(null);
-        await fetchWorkspaceInfo();
-        await fetchDashboardData();
-        
-        // Show success message with transformations
-        if (response.data.warnings?.length > 0) {
-          alert(`Import réussi avec avertissements:\n${response.data.warnings.join('\n')}`);
-        }
-      } else {
-        setUploadError(response.data.errors?.join('\n') || 'Erreur de normalisation');
-      }
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        const detail = err.response?.data?.detail;
-        setUploadError(typeof detail === 'string' ? detail : 'Erreur lors de l\'import');
-      } else {
-        setUploadError('Erreur inconnue');
-      }
-    } finally {
-      setApplyingMappings(false);
-    }
-  };
 
   // Fetch multi-model comparison data
   const fetchMultiModelData = async () => {
@@ -593,7 +474,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
   const handleActivateDashboard = useCallback(async (): Promise<boolean> => {
     // Check if data exists before attempting to load
     if (!workspaceInfo?.dataset?.has_data) {
-      setDashboardError('Aucune donnée disponible. Veuillez d\'abord uploader un dataset.');
+      setDashboardError('Aucune donnée disponible. Ce workspace n\'a pas de dataset initial.');
       return false;
     }
     
@@ -796,7 +677,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
   }
 
   // ============================================
-  // NO DATA STATE - Show Upload UI
+  // NO DATA STATE - Show message to create new workspace with data
   // ============================================
 
   if (!workspaceInfo?.dataset?.has_data) {
@@ -817,22 +698,32 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
             </div>
           </div>
 
-          {/* Upload Card */}
+          {/* No Data Message Card */}
           <div className="bg-white/10 backdrop-blur-sm rounded-2xl border border-white/20 p-8">
-            <div className="text-center mb-8">
-              <Database className="mx-auto h-16 w-16 text-blue-400 mb-4" />
+            <div className="text-center mb-6">
+              <Database className="mx-auto h-16 w-16 text-gray-400 mb-4" />
               <h2 className="text-xl font-semibold text-white mb-2">
-                Importer vos données
+                Aucune donnée dans ce workspace
               </h2>
-              <p className="text-gray-300">
-                Uploadez un fichier CSV pour commencer l'analyse
+              <p className="text-gray-300 mb-6">
+                Ce workspace a été créé sans dataset initial. Pour analyser des données fournisseurs, 
+                veuillez créer un nouveau workspace et importer un fichier CSV lors de la création.
               </p>
+              <button
+                onClick={onBack}
+                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+              >
+                Retour aux Workspaces
+              </button>
             </div>
 
-            {/* Schema Info */}
+            {/* Schema Info for reference */}
             {workspaceInfo?.schema && (
-              <div className="mb-8 p-4 bg-white/5 rounded-lg">
-                <h3 className="font-medium text-white mb-3">Format attendu</h3>
+              <div className="mt-8 p-4 bg-white/5 rounded-lg">
+                <h3 className="font-medium text-white mb-3">Format attendu pour ce type de workspace</h3>
+                <p className="text-sm text-gray-400 mb-3">
+                  Si vous créez un nouveau workspace avec ces données, utilisez le format suivant:
+                </p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
@@ -850,46 +741,6 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                       ))}
                     </tbody>
                   </table>
-                </div>
-              </div>
-            )}
-
-            {/* Upload Zone */}
-            <div className="relative">
-              <input
-                type="file"
-                accept=".csv"
-                onChange={handleFileUpload}
-                disabled={uploading}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-              />
-              <div className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
-                uploading ? 'border-blue-500 bg-blue-500/10' : 'border-white/30 hover:border-blue-400'
-              }`}>
-                {uploading ? (
-                  <div className="flex flex-col items-center">
-                    <div className="h-10 w-10 animate-spin rounded-full border-4 border-blue-500 border-t-transparent mb-4" />
-                    <p className="text-white">Traitement en cours...</p>
-                  </div>
-                ) : (
-                  <>
-                    <Upload className="mx-auto h-10 w-10 text-blue-400 mb-3" />
-                    <p className="text-white font-medium">Glissez-déposez ou cliquez pour uploader</p>
-                    <p className="text-gray-400 text-sm mt-1">Fichier CSV uniquement</p>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Upload Error */}
-            {uploadError && (
-              <div className="mt-4 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
-                <div className="flex items-start gap-3">
-                  <AlertCircle className="h-5 w-5 text-red-400 flex-shrink-0" />
-                  <div>
-                    <p className="font-medium text-red-300">Erreur de validation</p>
-                    <pre className="mt-1 text-sm text-red-200 whitespace-pre-wrap">{uploadError}</pre>
-                  </div>
                 </div>
               </div>
             )}
@@ -996,63 +847,6 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
         {/* Setup Tab - Shows workspace metadata without loading dashboard */}
         {activeTab === 'setup' && (
           <div className="space-y-6">
-            {/* Add Supplier / Import Data Section - PROMINENT CTA */}
-            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-6 shadow-lg">
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <div className="text-white">
-                  <h3 className="text-xl font-bold mb-2 flex items-center gap-2">
-                    <Users className="h-6 w-6" />
-                    Ajouter des Fournisseurs
-                  </h3>
-                  <p className="text-blue-100">
-                    Importez vos données fournisseurs pour ce workspace. 
-                    {workspaceInfo?.dataset?.has_data 
-                      ? ` Actuellement ${workspaceInfo.dataset.suppliers?.length || 0} fournisseur(s) importé(s).`
-                      : ' Aucun fournisseur importé.'}
-                  </p>
-                </div>
-                <div className="flex gap-3">
-                  {/* Standard Upload Button */}
-                  <label className="relative cursor-pointer">
-                    <input
-                      type="file"
-                      accept=".csv"
-                      onChange={handleFileUpload}
-                      disabled={uploading}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    />
-                    <div className={`flex items-center gap-2 px-5 py-3 rounded-lg font-medium transition-colors ${
-                      uploading ? 'bg-white/50 text-blue-300' : 'bg-white text-blue-600 hover:bg-blue-50'
-                    }`}>
-                      <Upload className="h-5 w-5" />
-                      Importer CSV
-                    </div>
-                  </label>
-                  {/* Smart Upload Button */}
-                  <label className="relative cursor-pointer">
-                    <input
-                      type="file"
-                      accept=".csv"
-                      onChange={handleSmartUpload}
-                      disabled={uploading}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    />
-                    <div className={`flex items-center gap-2 px-5 py-3 rounded-lg font-medium transition-colors ${
-                      uploading ? 'bg-yellow-200 text-yellow-500' : 'bg-yellow-400 text-yellow-900 hover:bg-yellow-300'
-                    }`}>
-                      <Zap className="h-5 w-5" />
-                      Import Intelligent
-                    </div>
-                  </label>
-                </div>
-              </div>
-              {uploadError && (
-                <div className="mt-4 p-3 bg-red-500/20 border border-red-400/30 rounded-lg">
-                  <p className="text-red-100 text-sm">{uploadError}</p>
-                </div>
-              )}
-            </div>
-
             {/* Workspace Metadata Card */}
             <div className="bg-white rounded-xl p-6 shadow">
               <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
@@ -1119,81 +913,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                   </div>
                 </div>
               ) : (
-                <p className="text-gray-500">Aucun dataset uploadé</p>
-              )}
-            </div>
-
-            {/* Upload New Dataset */}
-            <div className="bg-white rounded-xl p-6 shadow">
-              <h3 className="font-semibold text-gray-900 mb-4">Uploader un nouveau dataset</h3>
-              
-              {/* Two upload options */}
-              <div className="grid md:grid-cols-2 gap-4 mb-4">
-                {/* Standard Upload */}
-                <div className="relative">
-                  <input
-                    type="file"
-                    accept=".csv"
-                    onChange={handleFileUpload}
-                    disabled={uploading}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                  />
-                  <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors h-full ${
-                    uploading ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-blue-400'
-                  }`}>
-                    {uploading ? (
-                      <div className="flex flex-col items-center justify-center gap-3">
-                        <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
-                        <span className="text-blue-600">Traitement en cours...</span>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center gap-3">
-                        <Upload className="h-8 w-8 text-gray-400" />
-                        <span className="text-gray-700 font-medium">Upload Standard</span>
-                        <span className="text-gray-500 text-sm">Format attendu uniquement</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Smart Upload with LLM Mapping */}
-                <div className="relative">
-                  <input
-                    type="file"
-                    accept=".csv"
-                    onChange={handleSmartUpload}
-                    disabled={uploading}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                  />
-                  <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors h-full ${
-                    uploading ? 'border-yellow-500 bg-yellow-50' : 'border-yellow-300 hover:border-yellow-500 bg-gradient-to-br from-yellow-50 to-orange-50'
-                  }`}>
-                    <div className="flex flex-col items-center justify-center gap-3">
-                      <Zap className="h-8 w-8 text-yellow-500" />
-                      <span className="text-gray-700 font-medium">Upload Intelligent</span>
-                      <span className="text-gray-500 text-sm">L'IA suggère les mappings</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Schema hint */}
-              {workspaceInfo?.schema && (
-                <div className="mt-4 p-3 bg-gray-50 rounded-lg text-sm">
-                  <p className="text-gray-600">
-                    <strong>Format attendu:</strong>{' '}
-                    {workspaceInfo.schema.required?.join(', ')}
-                  </p>
-                </div>
-              )}
-
-              {uploadError && (
-                <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-                  <div className="flex items-start gap-3">
-                    <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0" />
-                    <pre className="text-sm text-red-700 whitespace-pre-wrap">{uploadError}</pre>
-                  </div>
-                </div>
+                <p className="text-gray-500">Aucun dataset uploadé. Le dataset initial a été défini lors de la création du workspace.</p>
               )}
             </div>
 
@@ -1691,9 +1411,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                         </span> basse priorité
                       </span>
                     </div>
-                    <p className="text-gray-500">
-                      Dernière mise à jour: {new Date().toLocaleTimeString('fr-FR')}
-                    </p>
+                    <ClientOnlyTime />
                   </div>
                 </div>
               </div>
@@ -1726,7 +1444,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
             <p className="text-gray-500 mb-6">
               {workspaceInfo?.dataset?.has_data 
                 ? 'Cliquez sur le bouton ci-dessous pour charger les visualisations.'
-                : 'Veuillez d\'abord uploader un dataset dans l\'onglet Configuration.'}
+                : 'Ce workspace n\'a pas de dataset initial. Créez un nouveau workspace avec des données.'}
             </p>
             {/* Error display */}
             {dashboardError && (
@@ -2192,7 +1910,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
             <p className="text-gray-500 mb-6">
               {workspaceInfo?.dataset?.has_data 
                 ? 'Cliquez sur le bouton ci-dessous pour charger le dashboard et voir les prédictions.'
-                : 'Veuillez d\'abord uploader un dataset dans l\'onglet Configuration.'}
+                : 'Ce workspace n\'a pas de dataset initial. Créez un nouveau workspace avec des données.'}
             </p>
             {/* Error display */}
             {dashboardError && (
@@ -2705,25 +2423,6 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                   Créer
                 </button>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* LLM Column Mapper Modal */}
-        {showLLMMapper && llmAnalysis && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 overflow-y-auto">
-            <div className="my-8">
-              <LLMColumnMapper
-                analysis={llmAnalysis}
-                originalColumns={llmAnalysis.column_analysis?.map((c: any) => c.column) || []}
-                onApply={handleApplyMappings}
-                onCancel={() => {
-                  setShowLLMMapper(false);
-                  setLLMAnalysis(null);
-                  setUploadError(null);
-                }}
-                loading={applyingMappings}
-              />
             </div>
           </div>
         )}

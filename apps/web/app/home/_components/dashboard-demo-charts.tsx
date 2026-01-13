@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 
 import { ArrowDown, ArrowUp, Menu, TrendingUp } from 'lucide-react';
 import {
@@ -39,10 +39,45 @@ import {
 } from '@kit/ui/table';
 
 export default function DashboardDemo() {
-  const mrr = useMemo(() => generateDemoData(), []);
-  const netRevenue = useMemo(() => generateDemoData(), []);
-  const fees = useMemo(() => generateDemoData(), []);
-  const newCustomers = useMemo(() => generateDemoData(), []);
+  // Use state to avoid hydration mismatch - data is only generated on client
+  const [demoData, setDemoData] = useState<{
+    mrr: [{ value: string; name: string }[], string];
+    netRevenue: [{ value: string; name: string }[], string];
+    fees: [{ value: string; name: string }[], string];
+    newCustomers: [{ value: string; name: string }[], string];
+  } | null>(null);
+
+  useEffect(() => {
+    setDemoData({
+      mrr: generateDemoData(),
+      netRevenue: generateDemoData(),
+      fees: generateDemoData(),
+      newCustomers: generateDemoData(),
+    });
+  }, []);
+
+  // Show loading state during SSR and initial client render
+  if (!demoData) {
+    return (
+      <div className="animate-in fade-in flex flex-col space-y-4 pb-36 duration-500">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {[1, 2, 3, 4].map((i) => (
+            <Card key={i}>
+              <CardHeader>
+                <div className="h-6 w-24 bg-gray-200 animate-pulse rounded" />
+                <div className="h-4 w-32 bg-gray-100 animate-pulse rounded mt-2" />
+              </CardHeader>
+              <CardContent>
+                <div className="h-32 bg-gray-100 animate-pulse rounded" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const { mrr, netRevenue, fees, newCustomers } = demoData;
 
   return (
     <div
