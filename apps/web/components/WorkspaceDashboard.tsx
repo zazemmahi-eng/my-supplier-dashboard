@@ -18,6 +18,7 @@ import {
   Database, AlertCircle, CheckCircle, FileText,
   BarChart3, ChevronRight, Search
 } from 'lucide-react';
+import { AppLogo } from './app-logo';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_SUPPLIER_API_URL ?? 'http://127.0.0.1:8000';
 
@@ -248,14 +249,19 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
         
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            Mes Workspaces
-          </h1>
-          <p className="text-gray-600">
-            Gérez vos espaces de travail pour l'analyse des fournisseurs
-          </p>
+        {/* Header with Logo */}
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-6">
+            <AppLogo href="/dashboard" />
+            <div className="border-l border-gray-300 pl-6">
+              <h1 className="text-3xl font-bold text-gray-900 mb-1">
+                Mes Workspaces
+              </h1>
+              <p className="text-gray-600">
+                Gérez vos espaces de travail pour l'analyse des fournisseurs
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Actions Bar */}

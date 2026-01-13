@@ -20,6 +20,7 @@ import {
   RefreshCw, FileSpreadsheet, Table, FileDown, Zap, PlayCircle
 } from 'lucide-react';
 import LLMColumnMapper from './LLMColumnMapper';
+import { AppLogo } from './app-logo';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_SUPPLIER_API_URL ?? 'http://127.0.0.1:8000';
 
@@ -844,17 +845,20 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 p-6">
         <div className="max-w-3xl mx-auto">
-          {/* Header */}
+          {/* Header with Logo */}
           <div className="flex items-center gap-4 mb-8">
-            <button
-              onClick={onBack}
-              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </button>
-            <div>
-              <h1 className="text-2xl font-bold text-white">{workspaceName}</h1>
-              <p className="text-blue-200">{dataTypeInfo?.label}</p>
+            <AppLogo href="/dashboard" className="bg-white/10 rounded-lg p-2" />
+            <div className="border-l border-white/30 pl-4 flex items-center gap-4">
+              <button
+                onClick={onBack}
+                className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </button>
+              <div>
+                <h1 className="text-2xl font-bold text-white">{workspaceName}</h1>
+                <p className="text-blue-200">{dataTypeInfo?.label}</p>
+              </div>
             </div>
           </div>
 
@@ -1045,17 +1049,20 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-4">
-            <button
-              onClick={onBack}
-              className="p-2 rounded-lg bg-white hover:bg-gray-100 shadow transition-colors"
-            >
-              <ArrowLeft className="h-5 w-5 text-gray-600" />
-            </button>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">{workspaceName}</h1>
-              <p className="text-gray-500">
-                {workspaceInfo?.dataset?.row_count} lignes · {workspaceInfo?.dataset?.suppliers?.length} fournisseurs
-              </p>
+            <AppLogo href="/dashboard" className="bg-white rounded-lg p-2 shadow" />
+            <div className="border-l border-gray-300 pl-4 flex items-center gap-4">
+              <button
+                onClick={onBack}
+                className="p-2 rounded-lg bg-white hover:bg-gray-100 shadow transition-colors"
+              >
+                <ArrowLeft className="h-5 w-5 text-gray-600" />
+              </button>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">{workspaceName}</h1>
+                <p className="text-gray-500">
+                  {workspaceInfo?.dataset?.row_count} lignes · {workspaceInfo?.dataset?.suppliers?.length} fournisseurs
+                </p>
+              </div>
             </div>
           </div>
 

@@ -2,6 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
+import { useState, useEffect } from 'react';
 
 import type { JwtPayload } from '@supabase/supabase-js';
 
@@ -38,8 +39,22 @@ export function SiteHeaderAccountSection({
 }: React.PropsWithChildren<{
   user: JwtPayload | null;
 }>) {
+  // Prevent hydration mismatch by only rendering on client
+  const [mounted, setMounted] = useState(false);
+  
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   if (!user) {
     return <AuthButtons />;
+  }
+
+  // Show placeholder during SSR to prevent hydration mismatch with Radix IDs
+  if (!mounted) {
+    return (
+      <div className="h-10 w-10 animate-pulse rounded-full bg-gray-200" />
+    );
   }
 
   return <SuspendedPersonalAccountDropdown user={user} />;
