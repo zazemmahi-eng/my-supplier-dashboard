@@ -11,7 +11,7 @@ import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import {
   Plus, FolderOpen, Trash2, Settings, Upload, Calendar,
-  Database, AlertCircle, CheckCircle, Clock, FileText,
+  Database, AlertCircle, CheckCircle, FileText,
   BarChart3, ChevronRight, Search, Filter, Zap, X
 } from 'lucide-react';
 import LLMColumnMapper from './LLMColumnMapper';
@@ -153,10 +153,16 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
     setUploadError(null);
   };
 
-  // Create workspace with optional dataset upload
+  // Create workspace with MANDATORY dataset upload
   const handleCreateWorkspace = async () => {
     if (!newWorkspace.name.trim()) {
       alert('Veuillez entrer un nom pour le workspace');
+      return;
+    }
+
+    // Dataset is mandatory for workspace creation
+    if (!uploadedFile) {
+      alert('Veuillez importer un dataset initial pour créer le workspace');
       return;
     }
 
@@ -495,11 +501,11 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                       {workspace.has_data ? (
                         <CheckCircle className="h-4 w-4 text-green-500" />
                       ) : (
-                        <Clock className="h-4 w-4 text-amber-500" />
+                        <AlertCircle className="h-4 w-4 text-red-500" />
                       )}
                     </div>
                     <p className="text-xs text-gray-500 mt-1">
-                      {workspace.has_data ? 'Données OK' : 'À importer'}
+                      {workspace.has_data ? 'Données OK' : 'Sans données'}
                     </p>
                   </div>
                 </div>
@@ -518,9 +524,15 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                   
                   <button
                     onClick={() => onSelectWorkspace(workspace.id, workspace.name)}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+                    disabled={!workspace.has_data}
+                    className={`flex items-center gap-2 px-4 py-2 font-medium rounded-lg transition-colors ${
+                      workspace.has_data 
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                        : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    }`}
+                    title={!workspace.has_data ? 'Ce workspace n\'a pas de données - supprimez-le et créez-en un nouveau' : ''}
                   >
-                    {workspace.has_data ? 'Analyser' : 'Configurer'}
+                    {workspace.has_data ? 'Analyser' : 'Sans données'}
                     <ChevronRight className="h-4 w-4" />
                   </button>
                 </div>
@@ -606,13 +618,16 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                 </div>
               </div>
 
-              {/* Dataset Upload Section */}
+              {/* Dataset Upload Section - MANDATORY */}
               <div className="mb-6">
-                <label className="block text-sm font-medium text-gray-700 mb-3">
-                  Dataset initial (optionnel)
-                </label>
+                <div className="flex items-center gap-2 mb-3">
+                  <label className="block text-sm font-medium text-gray-700">
+                    Dataset initial *
+                  </label>
+                  <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-medium rounded">Obligatoire</span>
+                </div>
                 <p className="text-sm text-gray-500 mb-3">
-                  Importez un fichier CSV pour initialiser le workspace avec des données.
+                  Importez un fichier CSV pour configurer et initialiser le workspace.
                 </p>
 
                 {/* Show selected file or upload options */}
@@ -679,10 +694,13 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                 )}
 
                 {/* Schema hint based on selected data type */}
-                <div className="mt-3 p-3 bg-gray-50 rounded-lg text-sm">
-                  <p className="text-gray-600">
-                    <strong>Format attendu pour {DATA_TYPE_INFO[newWorkspace.data_type as keyof typeof DATA_TYPE_INFO]?.label}:</strong>{' '}
+                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
+                  <p className="text-blue-800 font-medium mb-1">Format attendu pour {DATA_TYPE_INFO[newWorkspace.data_type as keyof typeof DATA_TYPE_INFO]?.label}:</p>
+                  <code className="text-blue-700 bg-blue-100 px-2 py-1 rounded text-xs">
                     {DATA_TYPE_INFO[newWorkspace.data_type as keyof typeof DATA_TYPE_INFO]?.columns.join(', ')}
+                  </code>
+                  <p className="text-blue-600 text-xs mt-2">
+                    Assurez-vous que votre fichier CSV contient ces colonnes.
                   </p>
                 </div>
 
@@ -712,11 +730,17 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                 </button>
                 <button
                   onClick={handleCreateWorkspace}
-                  disabled={creating || !newWorkspace.name.trim()}
+                  disabled={creating || !newWorkspace.name.trim() || !uploadedFile}
                   className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-all"
                 >
-                  {creating ? 'Création...' : (uploadedFile ? 'Créer et Importer' : 'Créer le Workspace')}
+                  {creating ? 'Création en cours...' : 'Créer le Workspace'}
                 </button>
+                {/* Hint when button is disabled */}
+                {!uploadedFile && newWorkspace.name.trim() && (
+                  <p className="text-xs text-amber-600 mt-2 text-center">
+                    ⚠️ Veuillez importer un dataset pour activer la création
+                  </p>
+                )}
               </div>
             </div>
           </div>
