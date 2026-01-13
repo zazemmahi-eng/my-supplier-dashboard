@@ -18,9 +18,10 @@ import {
   AlertCircle, CheckCircle, TrendingUp, TrendingDown, Activity,
   BarChart3, PieChart as PieChartIcon, Filter, Plus, X, Trash2,
   RefreshCw, FileSpreadsheet, Table, FileDown, Zap, PlayCircle,
-  FolderOpen, Users, Package, Calendar as CalendarIcon, Edit, Eye
+  FolderOpen, Users, Package, Calendar as CalendarIcon, Edit, Eye, Calculator
 } from 'lucide-react';
 import LLMColumnMapper from './LLMColumnMapper';
+import KPICalculator from './KPICalculator';
 import { AppLogo } from './app-logo';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_SUPPLIER_API_URL ?? 'http://127.0.0.1:8000';
@@ -80,7 +81,8 @@ interface WorkspaceInfo {
 
 interface DashboardData {
   kpis_globaux: Record<string, number>;
-  custom_kpis: Record<string, number>;
+  custom_kpis: Record<string, number | null>;
+  kpi_variables?: Record<string, number>;  // Available variables for custom KPI formulas
   suppliers: Array<Record<string, any>>;
   predictions: Array<{
     supplier: string;
@@ -222,6 +224,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
 
   // Custom KPI state
   const [showKPIModal, setShowKPIModal] = useState(false);
+  const [showKPICalculator, setShowKPICalculator] = useState(false);
   const [newKPI, setNewKPI] = useState({
     name: '',
     description: '',
@@ -2170,12 +2173,23 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
             {/* Custom KPIs */}
             {Object.keys(dashboardData.custom_kpis || {}).length > 0 && (
               <div className="bg-white rounded-xl p-6 shadow">
-                <h3 className="font-semibold text-gray-900 mb-4">KPIs Personnalisés</h3>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold text-gray-900">KPIs Personnalisés</h3>
+                  <button
+                    onClick={() => setShowKPICalculator(true)}
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Ajouter
+                  </button>
+                </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   {Object.entries(dashboardData.custom_kpis).map(([name, value]) => (
-                    <div key={name} className="p-4 bg-purple-50 rounded-lg">
+                    <div key={name} className="p-4 bg-purple-50 rounded-lg border border-purple-100">
                       <p className="text-sm text-purple-600 mb-1">{name}</p>
-                      <p className="text-2xl font-bold text-purple-800">{value}</p>
+                      <p className="text-2xl font-bold text-purple-800">
+                        {value !== null ? value : '—'}
+                      </p>
                     </div>
                   ))}
                 </div>
@@ -3203,29 +3217,70 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
             {/* Custom KPIs */}
             <div className="bg-white rounded-xl p-6 shadow">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-gray-900">KPIs Personnalisés</h3>
-                <button
-                  onClick={() => setShowKPIModal(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium"
-                >
-                  <Plus className="h-4 w-4" />
-                  Ajouter
-                </button>
+                <div>
+                  <h3 className="font-semibold text-gray-900">KPIs Personnalisés</h3>
+                  <p className="text-sm text-gray-500">Créez vos propres indicateurs avec des formules mathématiques</p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowKPIModal(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium"
+                  >
+                    <Plus className="h-4 w-4" />
+                    KPI Simple
+                  </button>
+                  <button
+                    onClick={() => setShowKPICalculator(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium"
+                  >
+                    <Calculator className="h-4 w-4" />
+                    Calculateur KPI
+                  </button>
+                </div>
               </div>
               
               {workspaceInfo?.custom_kpis && workspaceInfo.custom_kpis.length > 0 ? (
                 <div className="space-y-3">
-                  {workspaceInfo.custom_kpis.map((kpi) => (
-                    <div key={kpi.id} className="flex items-center justify-between p-4 bg-purple-50 rounded-lg">
-                      <div>
-                        <p className="font-medium text-purple-900">{kpi.name}</p>
-                        <p className="text-sm text-purple-600">
-                          {kpi.formula_type} de {kpi.target_field} ({kpi.unit})
-                        </p>
+                  {workspaceInfo.custom_kpis.map((kpi: any) => (
+                    <div key={kpi.id} className="flex items-center justify-between p-4 bg-purple-50 rounded-lg border border-purple-100">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium text-purple-900">{kpi.name}</p>
+                          {kpi.formula_type === 'expression' && (
+                            <span className="px-2 py-0.5 bg-purple-200 text-purple-700 text-xs rounded-full">
+                              Formule
+                            </span>
+                          )}
+                        </div>
+                        {kpi.formula_type === 'expression' && kpi.formula ? (
+                          <p className="text-sm text-purple-600 font-mono mt-1">
+                            Y = {kpi.formula}
+                          </p>
+                        ) : (
+                          <p className="text-sm text-purple-600">
+                            {kpi.formula_type} de {kpi.target_field} ({kpi.unit})
+                          </p>
+                        )}
+                        {kpi.formula_variables && kpi.formula_variables.length > 0 && (
+                          <p className="text-xs text-purple-400 mt-1">
+                            Variables: {kpi.formula_variables.join(', ')}
+                          </p>
+                        )}
                       </div>
+                      {/* Show current value if dashboard is active */}
+                      {dashboardData?.custom_kpis?.[kpi.name] !== undefined && (
+                        <div className="px-4 text-right">
+                          <p className="text-2xl font-bold text-purple-700">
+                            {dashboardData.custom_kpis[kpi.name] !== null 
+                              ? dashboardData.custom_kpis[kpi.name] 
+                              : '—'}
+                          </p>
+                          <p className="text-sm text-purple-500">{kpi.unit}</p>
+                        </div>
+                      )}
                       <button
                         onClick={() => handleDeleteKPI(kpi.id)}
-                        className="p-2 text-red-500 hover:bg-red-100 rounded-lg"
+                        className="p-2 text-red-500 hover:bg-red-100 rounded-lg ml-2"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -3233,9 +3288,39 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                   ))}
                 </div>
               ) : (
-                <p className="text-gray-500 text-center py-8">Aucun KPI personnalisé</p>
+                <div className="text-center py-12 bg-gray-50 rounded-xl">
+                  <Calculator className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                  <p className="text-gray-500 mb-4">Aucun KPI personnalisé</p>
+                  <button
+                    onClick={() => setShowKPICalculator(true)}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Créer un KPI avec le Calculateur
+                  </button>
+                </div>
               )}
             </div>
+
+            {/* Available Variables Info */}
+            {dashboardData?.kpi_variables && (
+              <div className="bg-white rounded-xl p-6 shadow">
+                <h3 className="font-semibold text-gray-900 mb-4">Variables Disponibles</h3>
+                <p className="text-sm text-gray-500 mb-4">
+                  Ces variables peuvent être utilisées dans vos formules personnalisées
+                </p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {Object.entries(dashboardData.kpi_variables).map(([name, value]) => (
+                    <div key={name} className="p-3 bg-gray-50 rounded-lg">
+                      <p className="text-xs text-gray-500 font-mono">{name}</p>
+                      <p className="text-lg font-semibold text-gray-800">
+                        {typeof value === 'number' ? value.toFixed(2) : value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -3516,6 +3601,21 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
               </div>
             </div>
           </div>
+        )}
+
+        {/* KPI Calculator Modal */}
+        {showKPICalculator && (
+          <KPICalculator
+            workspaceId={workspaceId}
+            onClose={() => setShowKPICalculator(false)}
+            onSuccess={async () => {
+              await fetchWorkspaceInfo();
+              if (dashboardActivated) {
+                await fetchDashboardData();
+              }
+            }}
+            kpiVariables={dashboardData?.kpi_variables || {}}
+          />
         )}
       </div>
     </div>

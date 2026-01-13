@@ -119,6 +119,15 @@ class CustomKPI(Base):
     """
     User-defined custom KPIs for a workspace.
     Allows users to define additional metrics beyond standard KPIs.
+    
+    Supports two modes:
+    1. Simple mode: formula_type is 'average', 'sum', or 'percentage' with target_field
+    2. Expression mode: formula_type is 'expression' with custom formula in 'formula' field
+    
+    Expression mode allows mathematical formulas using predefined variables like:
+    - delay, defect_rate, risk_score, conformity_rate, etc.
+    - Operators: +, -, *, /, **, ()
+    - Example: (delay / defect_rate) * 100
     """
     __tablename__ = "custom_kpis"
     
@@ -129,11 +138,22 @@ class CustomKPI(Base):
     name = Column(String(100), nullable=False)
     description = Column(Text, nullable=True)
     
-    # Formula type: 'average', 'sum', 'percentage', 'custom'
+    # Formula type: 'average', 'sum', 'percentage', 'expression'
+    # 'expression' enables custom formula evaluation
     formula_type = Column(String(50), default="average")
     
+    # Custom formula expression (when formula_type='expression')
+    # Example: "(delay / defect_rate) * 100"
+    # Only used when formula_type is 'expression'
+    formula = Column(Text, nullable=True)
+    
+    # Variables used in the formula (stored for quick reference)
+    # Example: ["delay", "defect_rate"]
+    formula_variables = Column(JSON, default=list)
+    
     # Field to calculate on (e.g., 'defects', 'delay')
-    target_field = Column(String(50), nullable=False)
+    # Used for simple formula types (average, sum, percentage)
+    target_field = Column(String(50), nullable=True)
     
     # Optional threshold for alerts
     threshold_warning = Column(Float, nullable=True)

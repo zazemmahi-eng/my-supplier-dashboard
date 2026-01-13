@@ -38,6 +38,14 @@ from backend.llm_ingestion import (
     process_csv_with_llm_mapping,
     ColumnRole
 )
+# Safe expression parser for custom KPIs
+from backend.kpi_expression_parser import (
+    SafeExpressionEvaluator,
+    get_available_variables,
+    validate_formula,
+    evaluate_formula,
+    compute_kpi_variables
+)
 
 # Get backend directory for sample files
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -87,12 +95,18 @@ class CustomKPICreate(BaseModel):
     """Schema for creating custom KPI"""
     name: str = Field(..., min_length=1, max_length=100)
     description: Optional[str] = None
-    formula_type: str = "average"  # average, sum, percentage, custom
-    target_field: str = Field(..., min_length=1)
+    formula_type: str = "average"  # average, sum, percentage, expression
+    target_field: Optional[str] = None  # For simple formulas
+    formula: Optional[str] = None  # For expression type
     threshold_warning: Optional[float] = None
     threshold_critical: Optional[float] = None
     unit: str = "%"
     decimal_places: int = 2
+
+
+class FormulaValidationRequest(BaseModel):
+    """Schema for validating a KPI formula"""
+    formula: str
 
 
 class ModelSelectionUpdate(BaseModel):
@@ -1305,6 +1319,8 @@ async def get_kpis(workspace_id: uuid.UUID, db: Session = Depends(get_db)):
             "description": kpi.description,
             "formula_type": kpi.formula_type,
             "target_field": kpi.target_field,
+            "formula": kpi.formula,
+            "formula_variables": kpi.formula_variables,
             "unit": kpi.unit,
             "threshold_warning": kpi.threshold_warning,
             "threshold_critical": kpi.threshold_critical,
@@ -1320,6 +1336,48 @@ async def get_kpis(workspace_id: uuid.UUID, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/kpi/variables")
+async def get_kpi_variables():
+    """
+    Get the list of available variables for custom KPI formulas.
+    These are the ONLY variables allowed in expressions.
+    """
+    return {
+        "variables": get_available_variables(),
+        "operators": [
+            {"symbol": "+", "name": "Addition"},
+            {"symbol": "-", "name": "Soustraction"},
+            {"symbol": "*", "name": "Multiplication"},
+            {"symbol": "/", "name": "Division"},
+            {"symbol": "**", "name": "Puissance"},
+            {"symbol": "(", "name": "Parenthèse ouvrante"},
+            {"symbol": ")", "name": "Parenthèse fermante"},
+        ],
+        "examples": [
+            {"formula": "delay + defect_rate", "description": "Somme des retards et défauts"},
+            {"formula": "(delay / defect_rate) * 100", "description": "Ratio retard/défaut"},
+            {"formula": "100 - conformity_rate", "description": "Taux de non-conformité"},
+            {"formula": "risk_score * 0.5 + delay * 0.5", "description": "Score pondéré"},
+        ]
+    }
+
+
+@router.post("/kpi/validate")
+async def validate_kpi_formula(request: FormulaValidationRequest):
+    """
+    Validate a KPI formula without creating the KPI.
+    Use this for real-time validation in the calculator UI.
+    
+    Returns validation result including:
+    - is_valid: Whether the formula is valid
+    - error_message: Error description if invalid
+    - variables_used: List of variables referenced in the formula
+    - normalized_formula: Cleaned up formula string
+    """
+    result = validate_formula(request.formula)
+    return result.to_dict()
+
+
 @router.post("/{workspace_id}/kpis/custom")
 async def create_custom_kpi(
     workspace_id: uuid.UUID,
@@ -1328,10 +1386,39 @@ async def create_custom_kpi(
 ):
     """
     Create a custom KPI for a workspace.
+    
+    Supports two modes:
+    1. Simple mode: formula_type is 'average', 'sum', or 'percentage' with target_field
+    2. Expression mode: formula_type is 'expression' with formula field
     """
     workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    # Validate based on formula_type
+    formula_variables = []
+    if kpi_data.formula_type == "expression":
+        # Validate the expression formula
+        if not kpi_data.formula:
+            raise HTTPException(
+                status_code=400, 
+                detail="Une formule est requise pour le type 'expression'"
+            )
+        
+        validation = validate_formula(kpi_data.formula)
+        if not validation.is_valid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Formule invalide: {validation.error_message}"
+            )
+        formula_variables = validation.variables_used
+    else:
+        # Simple formula requires target_field
+        if not kpi_data.target_field:
+            raise HTTPException(
+                status_code=400,
+                detail="Un champ cible est requis pour les formules simples"
+            )
     
     new_kpi = CustomKPI(
         workspace_id=workspace_id,
@@ -1339,6 +1426,8 @@ async def create_custom_kpi(
         description=kpi_data.description,
         formula_type=kpi_data.formula_type,
         target_field=kpi_data.target_field,
+        formula=kpi_data.formula,
+        formula_variables=formula_variables,
         threshold_warning=kpi_data.threshold_warning,
         threshold_critical=kpi_data.threshold_critical,
         unit=kpi_data.unit,
@@ -1356,6 +1445,8 @@ async def create_custom_kpi(
             "name": new_kpi.name,
             "formula_type": new_kpi.formula_type,
             "target_field": new_kpi.target_field,
+            "formula": new_kpi.formula,
+            "formula_variables": new_kpi.formula_variables,
             "unit": new_kpi.unit
         }
     }
@@ -1791,25 +1882,45 @@ async def get_workspace_dashboard(
             'eleve': {'count': len([r for r in risques if r['niveau_risque'] == 'Élevé']), 'label': 'Élevé'}
         }
         
-        # Calculate custom KPIs
+        # ========================================
+        # CUSTOM KPI CALCULATION
+        # Supports both simple formulas and expression-based formulas
+        # ========================================
         custom_kpis = db.query(CustomKPI).filter(
             CustomKPI.workspace_id == workspace_id,
             CustomKPI.is_enabled == True
         ).all()
         
+        # Compute KPI variables for expression evaluation
+        kpi_variables = compute_kpi_variables(df, kpis)
+        
         custom_kpi_values = {}
         for kpi in custom_kpis:
-            if kpi.target_field in df.columns:
-                if kpi.formula_type == "average":
-                    value = df[kpi.target_field].mean()
-                elif kpi.formula_type == "sum":
-                    value = df[kpi.target_field].sum()
-                elif kpi.formula_type == "percentage":
-                    value = (df[kpi.target_field] > 0).mean() * 100
-                else:
-                    value = df[kpi.target_field].mean()
-                
-                custom_kpi_values[kpi.name] = round(value, kpi.decimal_places)
+            try:
+                if kpi.formula_type == "expression" and kpi.formula:
+                    # Evaluate expression formula using safe parser
+                    result = evaluate_formula(kpi.formula, kpi_variables)
+                    if result.success:
+                        custom_kpi_values[kpi.name] = round(result.value, kpi.decimal_places)
+                    else:
+                        # Log error but don't fail the dashboard
+                        print(f"Error evaluating KPI '{kpi.name}': {result.error_message}")
+                        custom_kpi_values[kpi.name] = None
+                elif kpi.target_field and kpi.target_field in df.columns:
+                    # Simple formula calculation
+                    if kpi.formula_type == "average":
+                        value = df[kpi.target_field].mean()
+                    elif kpi.formula_type == "sum":
+                        value = df[kpi.target_field].sum()
+                    elif kpi.formula_type == "percentage":
+                        value = (df[kpi.target_field] > 0).mean() * 100
+                    else:
+                        value = df[kpi.target_field].mean()
+                    
+                    custom_kpi_values[kpi.name] = round(value, kpi.decimal_places)
+            except Exception as e:
+                print(f"Error calculating KPI '{kpi.name}': {str(e)}")
+                custom_kpi_values[kpi.name] = None
         
         # Get case type description for frontend
         schema = get_schema_for_case(workspace.data_type)
@@ -1822,6 +1933,7 @@ async def get_workspace_dashboard(
             "case_description": schema.get("description", ""),
             "kpis_globaux": kpis,
             "custom_kpis": custom_kpi_values,
+            "kpi_variables": kpi_variables,  # Expose for frontend preview
             "suppliers": risques,
             "actions": actions,
             "predictions": predictions,
