@@ -13,6 +13,26 @@ import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts';
+
+// Custom XAxis tick component with rotated labels
+const CustomAxisTick = (props: any) => {
+  const { x, y, payload } = props;
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text
+        x={0}
+        y={0}
+        dy={4}
+        textAnchor="end"
+        fill="#666"
+        fontSize={10}
+        style={{ transform: 'rotate(-45deg)', transformOrigin: '0px 0px' }}
+      >
+        {payload.value}
+      </text>
+    </g>
+  );
+};
 import {
   ArrowLeft, Database, Settings, FileText, Download, Upload,
   AlertCircle, CheckCircle, TrendingUp, TrendingDown, Activity,
@@ -23,25 +43,6 @@ import {
 import LLMColumnMapper from './LLMColumnMapper';
 import KPICalculator from './KPICalculator';
 import { AppLogo } from './app-logo';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_SUPPLIER_API_URL ?? 'http://127.0.0.1:8000';
-
-// ============================================
-// CLIENT-ONLY TIME COMPONENT (prevents hydration mismatch)
-// ============================================
-function ClientOnlyTime() {
-  const [time, setTime] = useState<string | null>(null);
-  
-  useEffect(() => {
-    setTime(new Date().toLocaleTimeString('fr-FR'));
-  }, []);
-  
-  return (
-    <p className="text-gray-500">
-      Dernière mise à jour: {time ?? '...'}
-    </p>
-  );
-}
 
 // ============================================
 // TYPE DEFINITIONS
@@ -152,6 +153,18 @@ const COLORS = {
 // ============================================
 // MAIN COMPONENT
 // ============================================
+
+function ClientOnlyTime() {
+  const [time, setTime] = useState<string>('');
+  
+  useEffect(() => {
+    setTime(new Date().toLocaleTimeString());
+  }, []);
+  
+  return <span>{time || '—'}</span>;
+}
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export default function WorkspaceView({ workspaceId, workspaceName, onBack }: WorkspaceViewProps) {
   // Core state
@@ -2230,7 +2243,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis 
                       dataKey="name" 
-                      tick={{ fontSize: 10, angle: -45, textAnchor: 'end' }}
+                      tick={<CustomAxisTick />}
                       interval={0}
                       height={80}
                     />
@@ -2690,7 +2703,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis 
                       dataKey="name" 
-                      tick={{ fontSize: 10, angle: -45, textAnchor: 'end' }}
+                      tick={<CustomAxisTick />}
                       interval={0}
                       height={80}
                     />
@@ -2729,7 +2742,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis 
                         dataKey="name" 
-                        tick={{ fontSize: 10, angle: -45, textAnchor: 'end' }}
+                        tick={<CustomAxisTick />}
                         interval={0}
                         height={80}
                       />
@@ -2777,7 +2790,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis 
                         dataKey="name" 
-                        tick={{ fontSize: 10, angle: -45, textAnchor: 'end' }}
+                        tick={<CustomAxisTick />}
                         interval={0}
                         height={80}
                       />

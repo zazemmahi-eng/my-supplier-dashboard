@@ -63,37 +63,44 @@ def create_admin(user_id: str, email: str, display_name: str = None):
     add admin role to an existing user.
     """
     user_uuid = validate_uuid(user_id)
+    name = display_name or email.split('@')[0]
     
     db = SessionLocal()
     try:
-        # Check if user already has a role
-        existing = db.query(UserRoleAssignment).filter(
-            UserRoleAssignment.user_id == user_uuid
-        ).first()
+        # Check if user already has admin role
+        result = db.execute(text("""
+            SELECT role FROM user_roles WHERE user_id = :user_id::uuid
+        """), {"user_id": str(user_uuid)})
+        existing = result.fetchone()
         
         if existing:
-            if existing.role == UserRole.ADMIN:
+            if existing[0] == 'admin':
                 print(f"User {email} is already an admin.")
                 return False
             else:
-                # Update to admin
-                existing.role = UserRole.ADMIN
-                existing.is_active = True
-                existing.display_name = display_name or existing.display_name
+                # Update to admin using raw SQL
+                db.execute(text("""
+                    UPDATE user_roles 
+                    SET role = 'admin', is_active = true, display_name = :name
+                    WHERE user_id = :user_id::uuid
+                """), {"user_id": str(user_uuid), "name": name})
                 db.commit()
                 print(f"✓ User {email} has been promoted to ADMIN.")
                 return True
         
-        # Create new admin role
-        new_admin = UserRoleAssignment(
-            user_id=user_uuid,
-            email=email,
-            display_name=display_name or email.split('@')[0],
-            role=UserRole.ADMIN,
-            assigned_by=None,  # Self-assigned for initial admin
-            is_active=True
-        )
-        db.add(new_admin)
+        # Create new admin role using raw SQL to avoid enum serialization issues
+        db.execute(text("""
+            INSERT INTO user_roles (id, user_id, email, role, is_active, created_at, display_name)
+            VALUES (
+                gen_random_uuid(),
+                :user_id::uuid,
+                :email,
+                'admin',
+                true,
+                NOW(),
+                :name
+            )
+        """), {"user_id": str(user_uuid), "email": email, "name": name})
         db.commit()
         
         print(f"✓ Admin user created successfully!")

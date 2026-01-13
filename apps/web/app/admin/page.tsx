@@ -83,6 +83,17 @@ interface UserDetails {
   }>;
 }
 
+interface AuditLogItem {
+  id: string;
+  admin_user_id: string;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  details: Record<string, any> | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
 // ============================================
 // COLORS
 // ============================================
@@ -113,6 +124,7 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<UserItem[]>([]);
   const [selectedUser, setSelectedUser] = useState<UserDetails | null>(null);
+  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
@@ -192,6 +204,20 @@ export default function AdminDashboard() {
     }
   }, [adminUserId, getHeaders]);
   
+  const fetchAuditLogs = useCallback(async () => {
+    if (!adminUserId) return;
+    
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/admin/audit-log`, {
+        headers: getHeaders()
+      });
+      setAuditLogs(response.data.logs || []);
+    } catch (err) {
+      console.error('Failed to fetch audit logs:', err);
+      // Don't set error for audit logs - it's not critical
+    }
+  }, [adminUserId, getHeaders]);
+  
   // Initial data load
   useEffect(() => {
     if (adminUserId) {
@@ -200,6 +226,13 @@ export default function AdminDashboard() {
         .finally(() => setLoading(false));
     }
   }, [adminUserId, fetchStats, fetchUsers]);
+  
+  // Fetch audit logs when tab changes to 'audit'
+  useEffect(() => {
+    if (activeTab === 'audit' && adminUserId) {
+      fetchAuditLogs();
+    }
+  }, [activeTab, adminUserId, fetchAuditLogs]);
   
   // ============================================
   // ACTIONS
@@ -558,14 +591,77 @@ export default function AdminDashboard() {
             
             {/* Audit Tab */}
             {activeTab === 'audit' && (
-              <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
-                <h3 className="font-semibold mb-4 flex items-center gap-2">
-                  <Clock className="h-5 w-5 text-yellow-400" />
-                  Recent Admin Actions
-                </h3>
-                <p className="text-gray-400">
-                  Audit log feature - actions are being recorded.
-                </p>
+              <div className="bg-gray-800 rounded-xl border border-gray-700">
+                <div className="flex items-center justify-between p-4 border-b border-gray-700">
+                  <h3 className="font-semibold flex items-center gap-2">
+                    <Clock className="h-5 w-5 text-yellow-400" />
+                    Recent Admin Actions
+                  </h3>
+                  <button
+                    onClick={fetchAuditLogs}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    Refresh
+                  </button>
+                </div>
+                
+                {auditLogs.length === 0 ? (
+                  <div className="px-4 py-12 text-center text-gray-500">
+                    <Clock className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p>No audit logs recorded yet</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-gray-700 max-h-[600px] overflow-y-auto">
+                    {auditLogs.map((log) => (
+                      <div key={log.id} className="p-4 hover:bg-gray-700/30 transition-colors">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                log.action.includes('DELETE') ? 'bg-red-500/20 text-red-400' :
+                                log.action.includes('CREATE') || log.action.includes('PROMOTE') ? 'bg-green-500/20 text-green-400' :
+                                log.action.includes('VIEW') ? 'bg-blue-500/20 text-blue-400' :
+                                'bg-yellow-500/20 text-yellow-400'
+                              }`}>
+                                {log.action.replace(/_/g, ' ')}
+                              </span>
+                              {log.target_type && (
+                                <span className="text-xs text-gray-500">
+                                  on {log.target_type}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-sm text-gray-400">
+                              Admin: <span className="text-gray-300">{log.admin_user_id.slice(0, 8)}...</span>
+                              {log.target_id && (
+                                <> • Target: <span className="text-gray-300">{log.target_id.slice(0, 8)}...</span></>
+                              )}
+                            </p>
+                            {log.details && Object.keys(log.details).length > 0 && (
+                              <details className="mt-2">
+                                <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-400">
+                                  Show details
+                                </summary>
+                                <pre className="mt-2 p-2 bg-gray-900/50 rounded text-xs text-gray-400 overflow-x-auto">
+                                  {JSON.stringify(log.details, null, 2)}
+                                </pre>
+                              </details>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs text-gray-500">
+                              {new Date(log.created_at).toLocaleDateString()}
+                            </p>
+                            <p className="text-xs text-gray-600">
+                              {new Date(log.created_at).toLocaleTimeString()}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </>

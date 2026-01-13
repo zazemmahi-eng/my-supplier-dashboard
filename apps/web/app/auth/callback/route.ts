@@ -28,28 +28,43 @@ export async function GET(request: NextRequest) {
   // Get authenticated user
   const { data: authData } = await client.auth.getUser();
   
+  console.log('[Auth Callback] User:', authData?.user?.id, authData?.user?.email);
+  
   if (authData?.user) {
     try {
+      const apiUrl = `${API_BASE_URL}/api/admin/check-user-role?user_id=${authData.user.id}`;
+      console.log('[Auth Callback] Checking role at:', apiUrl);
+      
       // Check user role in backend
-      const response = await fetch(
-        `${API_BASE_URL}/api/admin/check-user-role?user_id=${authData.user.id}`,
-        { cache: 'no-store' }
-      );
+      const response = await fetch(apiUrl, { 
+        cache: 'no-store',
+        headers: {
+          'Accept': 'application/json',
+        }
+      });
+      
+      console.log('[Auth Callback] Response status:', response.status);
       
       if (response.ok) {
         const roleData = await response.json();
+        console.log('[Auth Callback] Role data:', JSON.stringify(roleData));
         
         // Redirect based on role
-        if (roleData.is_admin) {
+        if (roleData.is_admin === true) {
+          console.log('[Auth Callback] Redirecting to admin...');
           return redirect(pathsConfig.admin.home);
         }
+      } else {
+        const errorText = await response.text();
+        console.error('[Auth Callback] API error:', response.status, errorText);
       }
     } catch (error) {
       // If role check fails, continue with default redirect
-      console.error('Role check failed:', error);
+      console.error('[Auth Callback] Role check failed:', error);
     }
   }
 
   // Default: redirect to dashboard
+  console.log('[Auth Callback] Redirecting to dashboard (default)');
   return redirect(nextPath);
 }

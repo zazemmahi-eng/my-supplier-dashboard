@@ -1,21 +1,39 @@
 # admin_routes.py
 """
-FastAPI routes for Admin functionality.
+==============================================================================
+FastAPI Routes for Admin Functionality
+==============================================================================
+
+This module provides all admin-related API endpoints for the application.
+All endpoints require admin authentication and role verification.
 
 SECURITY RULES:
-- All routes require admin authentication
-- Admin can only VIEW (read-only) user data
+---------------
+- All routes require admin authentication via X-Admin-User-ID header
+- Admin role is verified server-side against user_roles table
+- Admin can only VIEW (read-only) user data and dashboards
 - Admin CAN create/delete users
 - Admin CANNOT modify user data, workspaces, KPIs, or predictions
+- All actions are logged to admin_audit_logs table
 
-Endpoints:
+ENDPOINTS:
+----------
+Public (for auth callback):
+- GET /api/admin/check-user-role - Check if user has admin role
+
+Admin-only:
 - GET /api/admin/stats - Global application statistics
 - GET /api/admin/users - List all users
 - GET /api/admin/users/{user_id} - Get user details
-- DELETE /api/admin/users/{user_id} - Delete user (with all their data)
+- DELETE /api/admin/users/{user_id} - Delete user (cascading)
 - GET /api/admin/users/{user_id}/workspaces - List user's workspaces
-- GET /api/admin/users/{user_id}/workspaces/{workspace_id}/dashboard - View user's workspace dashboard (READ-ONLY)
+- GET /api/admin/users/{user_id}/workspaces/{workspace_id}/dashboard - View dashboard (READ-ONLY)
 - POST /api/admin/users - Create new user
+- POST /api/admin/promote-to-admin - Promote user to admin role
+- GET /api/admin/audit-log - View audit trail
+- GET /api/admin/check-role - Verify current admin session
+
+==============================================================================
 """
 
 import uuid
@@ -29,7 +47,7 @@ from sqlalchemy import text, func
 from pydantic import BaseModel, Field
 
 from backend.database import get_db, engine
-from backend.admin_models import UserRole, UserRoleAssignment, AdminAuditLog
+from backend.admin_models import UserRole, UserRoleAssignment, AdminAuditLog, AdminLevel
 from backend.workspace_models import Workspace, WorkspaceDataset, CustomKPI, DataTypeCase
 
 
@@ -112,24 +130,30 @@ async def get_current_admin(
             detail="Invalid user ID format"
         )
     
-    # Check user role in database
-    user_role = db.query(UserRoleAssignment).filter(
-        UserRoleAssignment.user_id == user_uuid
-    ).first()
+    # Check user role in database using raw SQL to avoid enum issues
+    result = db.execute(
+        text("SELECT role::text, is_active, email FROM user_roles WHERE user_id = :uid"),
+        {"uid": str(user_uuid)}
+    )
+    row = result.fetchone()
     
-    if not user_role:
+    if not row:
         raise HTTPException(
             status_code=403,
             detail="Access denied. User not found in role system."
         )
     
-    if user_role.role != UserRole.ADMIN:
+    role_value = row[0]  # role as text
+    is_active = row[1]
+    user_email = row[2]
+    
+    if role_value != 'admin':
         raise HTTPException(
             status_code=403,
             detail="Access denied. Admin privileges required."
         )
     
-    if not user_role.is_active:
+    if not is_active:
         raise HTTPException(
             status_code=403,
             detail="Access denied. Admin account is deactivated."
@@ -137,7 +161,7 @@ async def get_current_admin(
     
     return AdminUserInfo(
         user_id=str(user_uuid),
-        email=x_admin_email or user_role.email or "",
+        email=x_admin_email or user_email or "",
         role="admin"
     )
 
@@ -190,12 +214,14 @@ async def check_user_role(
     except ValueError:
         return {"role": "user", "is_admin": False, "redirect": "/dashboard"}
     
-    # Check user role in database
-    user_role = db.query(UserRoleAssignment).filter(
-        UserRoleAssignment.user_id == user_uuid
-    ).first()
+    # Check user role in database using raw SQL to avoid enum issues
+    result = db.execute(
+        text("SELECT role::text, is_active, display_name, email FROM user_roles WHERE user_id = :uid"),
+        {"uid": str(user_uuid)}
+    )
+    row = result.fetchone()
     
-    if not user_role:
+    if not row:
         # User not in role system = regular user
         return {
             "role": "user",
@@ -204,20 +230,28 @@ async def check_user_role(
             "display_name": None
         }
     
-    if user_role.role == UserRole.ADMIN and user_role.is_active:
+    role_value = row[0]  # role as text
+    is_active = row[1]
+    display_name = row[2]
+    email = row[3]
+    
+    # Check if admin
+    is_admin = role_value == 'admin' and is_active
+    
+    if is_admin:
         return {
             "role": "admin",
             "is_admin": True,
             "redirect": "/admin",
-            "display_name": user_role.display_name,
-            "email": user_role.email
+            "display_name": display_name,
+            "email": email
         }
     
     return {
         "role": "user",
         "is_admin": False,
         "redirect": "/dashboard",
-        "display_name": user_role.display_name
+        "display_name": display_name
     }
 
 
@@ -354,22 +388,72 @@ async def list_users(
     """
     List all users with their workspace and supplier counts.
     Admin only.
-    """
-    users = db.query(UserRoleAssignment).filter(
-        UserRoleAssignment.is_active == True
-    ).order_by(UserRoleAssignment.created_at.desc()).all()
     
+    This includes:
+    1. Users in user_roles table
+    2. Workspace owners who may not be in user_roles yet (pre-admin implementation)
+    """
+    # Dictionary to store all users by user_id
+    all_users = {}
+    
+    # 1. Get users from user_roles table
+    role_rows = db.execute(
+        text("""
+            SELECT user_id, email, display_name, role::text, is_active, created_at
+            FROM user_roles
+            WHERE is_active = true
+            ORDER BY created_at DESC
+        """)
+    ).fetchall()
+    
+    for row in role_rows:
+        user_id = str(row[0])
+        all_users[user_id] = {
+            "user_id": row[0],
+            "email": row[1] or "N/A",
+            "display_name": row[2],
+            "role": row[3],
+            "is_active": row[4],
+            "created_at": row[5]
+        }
+    
+    # 2. Get workspace owners who may not be in user_roles
+    workspace_owners = db.execute(
+        text("""
+            SELECT DISTINCT owner_id
+            FROM workspaces
+            WHERE owner_id IS NOT NULL
+        """)
+    ).fetchall()
+    
+    for (owner_id,) in workspace_owners:
+        owner_id_str = str(owner_id)
+        if owner_id_str not in all_users:
+            # This is a user with workspaces but not in user_roles
+            # Try to get email from Supabase auth.users if available, otherwise use owner_id
+            all_users[owner_id_str] = {
+                "user_id": owner_id,
+                "email": f"User {owner_id_str[:8]}...",  # Placeholder if no email
+                "display_name": None,
+                "role": "user",
+                "is_active": True,
+                "created_at": datetime.utcnow()
+            }
+    
+    # 3. Build result with workspace and supplier counts
     result = []
-    for user in users:
+    for user_id_str, user_data in all_users.items():
+        user_id = user_data["user_id"]
+        
         # Count workspaces for this user
         workspace_count = db.query(Workspace).filter(
-            Workspace.owner_id == user.user_id
+            Workspace.owner_id == user_id
         ).count()
         
         # Count suppliers for this user
         supplier_count = 0
         user_workspaces = db.query(Workspace).filter(
-            Workspace.owner_id == user.user_id
+            Workspace.owner_id == user_id
         ).all()
         
         for ws in user_workspaces:
@@ -381,15 +465,18 @@ async def list_users(
                 supplier_count += len(dataset.suppliers)
         
         result.append(UserListItem(
-            id=str(user.user_id),
-            email=user.email or "N/A",
-            display_name=user.display_name,
-            role=user.role.value,
+            id=str(user_id),
+            email=user_data["email"],
+            display_name=user_data["display_name"],
+            role=user_data["role"],
             workspace_count=workspace_count,
             supplier_count=supplier_count,
-            created_at=user.created_at,
-            is_active=user.is_active
+            created_at=user_data["created_at"],
+            is_active=user_data["is_active"]
         ))
+    
+    # Sort by workspace count (users with most workspaces first), then by created_at
+    result.sort(key=lambda x: (-x.workspace_count, x.created_at or datetime.min), reverse=False)
     
     # Log admin action
     log_admin_action(
@@ -409,18 +496,46 @@ async def get_user_details(
     """
     Get detailed information about a specific user.
     Admin only, READ-ONLY.
+    
+    Handles both users in user_roles table and workspace owners not yet registered.
     """
     try:
         user_uuid = uuid.UUID(user_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid user ID format")
     
-    user = db.query(UserRoleAssignment).filter(
-        UserRoleAssignment.user_id == user_uuid
-    ).first()
+    # Use raw SQL for user data to avoid enum issues
+    user_row = db.execute(
+        text("""
+            SELECT user_id, email, display_name, role::text, is_active, created_at
+            FROM user_roles
+            WHERE user_id = :uid
+        """),
+        {"uid": str(user_uuid)}
+    ).fetchone()
     
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # If user not in user_roles, check if they have workspaces
+    if not user_row:
+        # Check if this user has workspaces (pre-admin implementation user)
+        workspace_count = db.query(Workspace).filter(
+            Workspace.owner_id == user_uuid
+        ).count()
+        
+        if workspace_count == 0:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # User exists via workspace ownership
+        user_email = f"User {str(user_uuid)[:8]}..."
+        user_display_name = None
+        user_role = "user"
+        user_is_active = True
+        user_created_at = None
+    else:
+        user_email = user_row[1] or "N/A"
+        user_display_name = user_row[2]
+        user_role = user_row[3]
+        user_is_active = user_row[4]
+        user_created_at = user_row[5]
     
     # Get user's workspaces
     workspaces = db.query(Workspace).filter(
@@ -443,15 +558,19 @@ async def get_user_details(
         total_suppliers += supplier_count
         total_orders += row_count
         
+        # Handle enum values safely
+        data_type_val = ws.data_type.value if hasattr(ws.data_type, 'value') else str(ws.data_type)
+        status_val = ws.status.value if hasattr(ws.status, 'value') else str(ws.status)
+        
         workspace_data.append({
             "id": str(ws.id),
             "name": ws.name,
             "description": ws.description,
-            "data_type": ws.data_type.value,
-            "status": ws.status.value,
+            "data_type": data_type_val,
+            "status": status_val,
             "supplier_count": supplier_count,
             "order_count": row_count,
-            "has_data": dataset is not None,
+            "has_data": dataset is not None and row_count > 0,
             "created_at": ws.created_at.isoformat() if ws.created_at else None
         })
     
@@ -464,12 +583,12 @@ async def get_user_details(
     
     return {
         "user": {
-            "id": str(user.user_id),
-            "email": user.email or "N/A",
-            "display_name": user.display_name,
-            "role": user.role.value,
-            "is_active": user.is_active,
-            "created_at": user.created_at.isoformat() if user.created_at else None
+            "id": str(user_uuid),
+            "email": user_email,
+            "display_name": user_display_name,
+            "role": user_role,
+            "is_active": user_is_active,
+            "created_at": user_created_at.isoformat() if user_created_at else None
         },
         "stats": {
             "workspace_count": len(workspaces),
@@ -879,16 +998,26 @@ async def check_admin_role(
     except ValueError:
         return {"is_admin": False, "reason": "Invalid user ID format"}
     
-    user_role = db.query(UserRoleAssignment).filter(
-        UserRoleAssignment.user_id == user_uuid
-    ).first()
+    # Use raw SQL to avoid enum serialization issues
+    result = db.execute(
+        text("""
+            SELECT role::text, is_active, email
+            FROM user_roles
+            WHERE user_id = :uid
+        """),
+        {"uid": str(user_uuid)}
+    ).fetchone()
     
-    if not user_role:
+    if not result:
         return {"is_admin": False, "reason": "User not found"}
     
+    role_str = result[0]
+    is_active = result[1]
+    email = result[2]
+    
     return {
-        "is_admin": user_role.role == UserRole.ADMIN,
-        "role": user_role.role.value,
-        "is_active": user_role.is_active,
-        "email": user_role.email
+        "is_admin": role_str == "admin",
+        "role": role_str,
+        "is_active": is_active,
+        "email": email
     }

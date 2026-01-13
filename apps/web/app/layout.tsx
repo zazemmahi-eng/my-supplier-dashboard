@@ -22,7 +22,7 @@ export default async function RootLayout({
 
   return (
     <html lang={language} className={className} suppressHydrationWarning>
-      <body>
+      <body suppressHydrationWarning>
         <RootProviders theme={theme} lang={language}>
           {children}
         </RootProviders>
