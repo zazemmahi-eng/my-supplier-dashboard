@@ -5,16 +5,19 @@
  * Main entry point for workspace management.
  * Displays list of workspaces, allows creation of new workspaces,
  * and provides navigation to individual workspace views.
+ * 
+ * TWO-STEP WORKSPACE LIFECYCLE:
+ * 1) Create Workspace - metadata only (name, description, case type)
+ * 2) Configure Workspace - mandatory dataset import before use
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import {
-  Plus, FolderOpen, Trash2, Settings, Upload, Calendar,
+  Plus, FolderOpen, Trash2, Settings, Calendar,
   Database, AlertCircle, CheckCircle, FileText,
-  BarChart3, ChevronRight, Search, Filter, Zap, X
+  BarChart3, ChevronRight, Search
 } from 'lucide-react';
-import LLMColumnMapper from './LLMColumnMapper';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_SUPPLIER_API_URL ?? 'http://127.0.0.1:8000';
 
@@ -49,7 +52,7 @@ const DATA_TYPE_INFO = {
   late_days: {
     label: 'Case B - Défauts Uniquement',
     description: 'Analyse du taux de défauts par commande',
-    columns: ['supplier', 'order_date', 'defects'],
+    columns: ['supplier', 'defects'],
     color: 'bg-purple-100 text-purple-800',
     icon: '🔍',
     metrics: ['Taux de défaut', 'Défaut moyen', 'Conformité']
@@ -85,25 +88,13 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
-  // New workspace form state
+  // New workspace form state (METADATA ONLY - no dataset at creation)
   const [newWorkspace, setNewWorkspace] = useState({
     name: '',
     description: '',
     data_type: 'delays'
   });
   const [creating, setCreating] = useState(false);
-
-  // Dataset upload state for workspace creation
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [uploadMode, setUploadMode] = useState<'standard' | 'intelligent' | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  
-  // LLM Mapper state
-  const [showLLMMapper, setShowLLMMapper] = useState(false);
-  const [llmAnalysis, setLLMAnalysis] = useState<any>(null);
-  const [llmCsvContent, setLLMCsvContent] = useState<string>('');
-  const [llmFilename, setLLMFilename] = useState<string>('');
 
   // ============================================
   // DATA FETCHING
@@ -131,106 +122,21 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
   // ACTIONS
   // ============================================
 
-  // Handle file selection for workspace creation
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>, mode: 'standard' | 'intelligent') => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    if (!file.name.endsWith('.csv')) {
-      setUploadError('Format invalide. Veuillez uploader un fichier CSV.');
-      return;
-    }
-
-    setUploadedFile(file);
-    setUploadMode(mode);
-    setUploadError(null);
-  };
-
-  // Remove selected file
-  const handleRemoveFile = () => {
-    setUploadedFile(null);
-    setUploadMode(null);
-    setUploadError(null);
-  };
-
-  // Create workspace with MANDATORY dataset upload
+  // Create workspace with METADATA ONLY - no dataset import at this step
   const handleCreateWorkspace = async () => {
     if (!newWorkspace.name.trim()) {
       alert('Veuillez entrer un nom pour le workspace');
       return;
     }
 
-    // Dataset is mandatory for workspace creation
-    if (!uploadedFile) {
-      alert('Veuillez importer un dataset initial pour créer le workspace');
-      return;
-    }
-
     try {
       setCreating(true);
-      setUploadError(null);
 
-      // Step 1: Create the workspace
-      const createResponse = await axios.post(`${API_BASE_URL}/api/workspaces`, newWorkspace);
-      const workspaceId = createResponse.data.id;
-
-      // Step 2: If a file was uploaded, upload it to the new workspace
-      if (uploadedFile && uploadMode === 'standard') {
-        try {
-          const formData = new FormData();
-          formData.append('file', uploadedFile);
-          await axios.post(`${API_BASE_URL}/api/workspaces/${workspaceId}/upload`, formData, {
-            headers: { 'Content-Type': 'multipart/form-data' }
-          });
-        } catch (uploadErr) {
-          if (axios.isAxiosError(uploadErr)) {
-            const detail = uploadErr.response?.data?.detail;
-            const errorMsg = typeof detail === 'object' && detail.errors 
-              ? detail.errors.join('\n') 
-              : (detail || 'Erreur lors du téléchargement');
-            setUploadError(`Workspace créé mais erreur d'import: ${errorMsg}`);
-          }
-        }
-      } else if (uploadedFile && uploadMode === 'intelligent') {
-        // For intelligent upload, we need to analyze first then show the mapper
-        try {
-          const formData = new FormData();
-          formData.append('file', uploadedFile);
-          const analyzeResponse = await axios.post(
-            `${API_BASE_URL}/api/workspaces/${workspaceId}/upload/analyze`, 
-            formData,
-            { headers: { 'Content-Type': 'multipart/form-data' } }
-          );
-          
-          // Store analysis results for LLM mapper
-          setLLMAnalysis(analyzeResponse.data.analysis);
-          setLLMCsvContent(analyzeResponse.data.csv_content);
-          setLLMFilename(analyzeResponse.data.filename || uploadedFile.name);
-          
-          // Close create modal and show LLM mapper
-          setShowCreateModal(false);
-          setShowLLMMapper(true);
-          
-          // Store workspaceId for when mappings are applied
-          (window as any).__pendingWorkspaceId = workspaceId;
-          
-          // Reset form but don't refresh yet - wait for LLM mapping to complete
-          setNewWorkspace({ name: '', description: '', data_type: 'delays' });
-          setUploadedFile(null);
-          setUploadMode(null);
-          setCreating(false);
-          return; // Exit early - LLM mapper will handle the rest
-        } catch (analyzeErr) {
-          if (axios.isAxiosError(analyzeErr)) {
-            setUploadError(`Erreur d'analyse: ${analyzeErr.response?.data?.detail || 'Erreur inconnue'}`);
-          }
-        }
-      }
+      // Create workspace with metadata only
+      await axios.post(`${API_BASE_URL}/api/workspaces`, newWorkspace);
       
       // Reset form and refresh list
       setNewWorkspace({ name: '', description: '', data_type: 'delays' });
-      setUploadedFile(null);
-      setUploadMode(null);
       setShowCreateModal(false);
       await fetchWorkspaces();
     } catch (err) {
@@ -242,53 +148,6 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
     } finally {
       setCreating(false);
     }
-  };
-
-  // Apply LLM mappings after workspace creation
-  const handleApplyMappings = async (mappings: any[], targetCase: string) => {
-    const workspaceId = (window as any).__pendingWorkspaceId;
-    if (!workspaceId) {
-      alert('Erreur: workspace non trouvé');
-      return;
-    }
-
-    try {
-      const params = new URLSearchParams({
-        csv_content: llmCsvContent,
-        mappings: JSON.stringify(mappings),
-        target_case: targetCase,
-        filename: llmFilename
-      });
-
-      const response = await axios.post(
-        `${API_BASE_URL}/api/workspaces/${workspaceId}/upload/apply-mappings?${params.toString()}`
-      );
-
-      if (response.data.success) {
-        setShowLLMMapper(false);
-        setLLMAnalysis(null);
-        delete (window as any).__pendingWorkspaceId;
-        await fetchWorkspaces();
-        
-        if (response.data.warnings?.length > 0) {
-          alert(`Import réussi avec avertissements:\n${response.data.warnings.join('\n')}`);
-        }
-      } else {
-        alert(`Erreur de normalisation: ${response.data.errors?.join('\n') || 'Erreur inconnue'}`);
-      }
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        alert(`Erreur: ${err.response?.data?.detail || 'Erreur lors de l\'import'}`);
-      }
-    }
-  };
-
-  // Cancel LLM mapping
-  const handleCancelLLMMapping = () => {
-    setShowLLMMapper(false);
-    setLLMAnalysis(null);
-    delete (window as any).__pendingWorkspaceId;
-    fetchWorkspaces(); // Refresh to show the new workspace (without data)
   };
 
   const handleDeleteWorkspace = async (workspace: Workspace) => {
@@ -321,13 +180,19 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
   // RENDER HELPERS
   // ============================================
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (workspace: Workspace) => {
+    if (!workspace.has_data) {
+      return {
+        className: 'bg-amber-100 text-amber-800',
+        label: 'À configurer'
+      };
+    }
     const styles = {
-      active: 'bg-green-100 text-green-800',
-      archived: 'bg-gray-100 text-gray-800',
-      pending: 'bg-yellow-100 text-yellow-800'
+      active: { className: 'bg-green-100 text-green-800', label: 'Actif' },
+      archived: { className: 'bg-gray-100 text-gray-800', label: 'Archivé' },
+      pending: { className: 'bg-yellow-100 text-yellow-800', label: 'En attente' }
     };
-    return styles[status as keyof typeof styles] || styles.pending;
+    return styles[workspace.status as keyof typeof styles] || styles.pending;
   };
 
   const formatDate = (dateString: string) => {
@@ -453,107 +318,120 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
           </div>
         ) : (
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {filteredWorkspaces.map((workspace) => (
-              <div
-                key={workspace.id}
-                className="bg-white rounded-xl border border-gray-100 overflow-hidden hover:shadow-lg hover:border-blue-200 transition-all group shadow-sm"
-              >
-                {/* Card Header */}
-                <div className="p-6 border-b border-gray-100">
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex-1">
-                      <h3 className="text-lg font-semibold text-gray-900 truncate">
-                        {workspace.name}
-                      </h3>
-                      <span className={`inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded ${DATA_TYPE_INFO[workspace.data_type as keyof typeof DATA_TYPE_INFO]?.color || 'bg-gray-100 text-gray-800'}`}>
-                        {DATA_TYPE_INFO[workspace.data_type as keyof typeof DATA_TYPE_INFO]?.label || workspace.data_type}
+            {filteredWorkspaces.map((workspace) => {
+              const statusInfo = getStatusBadge(workspace);
+              return (
+                <div
+                  key={workspace.id}
+                  className="bg-white rounded-xl border border-gray-100 overflow-hidden hover:shadow-lg hover:border-blue-200 transition-all group shadow-sm"
+                >
+                  {/* Card Header */}
+                  <div className="p-6 border-b border-gray-100">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex-1">
+                        <h3 className="text-lg font-semibold text-gray-900 truncate">
+                          {workspace.name}
+                        </h3>
+                        <span className={`inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded ${DATA_TYPE_INFO[workspace.data_type as keyof typeof DATA_TYPE_INFO]?.color || 'bg-gray-100 text-gray-800'}`}>
+                          {DATA_TYPE_INFO[workspace.data_type as keyof typeof DATA_TYPE_INFO]?.label || workspace.data_type}
+                        </span>
+                      </div>
+                      <span className={`px-2 py-1 text-xs font-medium rounded ${statusInfo.className}`}>
+                        {statusInfo.label}
                       </span>
                     </div>
-                    <span className={`px-2 py-1 text-xs font-medium rounded ${getStatusBadge(workspace.status)}`}>
-                      {workspace.status}
-                    </span>
+                    {workspace.description && (
+                      <p className="text-sm text-gray-500 line-clamp-2">
+                        {workspace.description}
+                      </p>
+                    )}
                   </div>
-                  {workspace.description && (
-                    <p className="text-sm text-gray-500 line-clamp-2">
-                      {workspace.description}
-                    </p>
-                  )}
-                </div>
 
-                {/* Card Stats */}
-                <div className="p-4 bg-gray-50 grid grid-cols-3 gap-4 text-center">
-                  <div>
-                    <div className="flex items-center justify-center gap-1 text-gray-400 mb-1">
-                      <Database className="h-4 w-4" />
+                  {/* Card Stats */}
+                  <div className="p-4 bg-gray-50 grid grid-cols-3 gap-4 text-center">
+                    <div>
+                      <div className="flex items-center justify-center gap-1 text-gray-400 mb-1">
+                        <Database className="h-4 w-4" />
+                      </div>
+                      <p className="text-lg font-semibold text-gray-900">{workspace.row_count}</p>
+                      <p className="text-xs text-gray-500">Lignes</p>
                     </div>
-                    <p className="text-lg font-semibold text-gray-900">{workspace.row_count}</p>
-                    <p className="text-xs text-gray-500">Lignes</p>
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-center gap-1 text-gray-400 mb-1">
-                      <FileText className="h-4 w-4" />
+                    <div>
+                      <div className="flex items-center justify-center gap-1 text-gray-400 mb-1">
+                        <FileText className="h-4 w-4" />
+                      </div>
+                      <p className="text-lg font-semibold text-gray-900">{workspace.supplier_count}</p>
+                      <p className="text-xs text-gray-500">Fournisseurs</p>
                     </div>
-                    <p className="text-lg font-semibold text-gray-900">{workspace.supplier_count}</p>
-                    <p className="text-xs text-gray-500">Fournisseurs</p>
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-center gap-1 text-gray-400 mb-1">
-                      {workspace.has_data ? (
-                        <CheckCircle className="h-4 w-4 text-green-500" />
-                      ) : (
-                        <AlertCircle className="h-4 w-4 text-red-500" />
-                      )}
+                    <div>
+                      <div className="flex items-center justify-center gap-1 text-gray-400 mb-1">
+                        {workspace.has_data ? (
+                          <CheckCircle className="h-4 w-4 text-green-500" />
+                        ) : (
+                          <AlertCircle className="h-4 w-4 text-amber-500" />
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {workspace.has_data ? 'Configuré' : 'Non configuré'}
+                      </p>
                     </div>
-                    <p className="text-xs text-gray-500 mt-1">
-                      {workspace.has_data ? 'Données OK' : 'Sans données'}
-                    </p>
                   </div>
-                </div>
 
-                {/* Card Actions */}
-                <div className="p-4 flex items-center justify-between bg-white">
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleDeleteWorkspace(workspace)}
-                      className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                      title="Supprimer"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                  {/* Card Actions */}
+                  <div className="p-4 flex items-center justify-between bg-white">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleDeleteWorkspace(workspace)}
+                        className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Supprimer"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                    
+                    {/* Main action button - different based on configuration state */}
+                    {workspace.has_data ? (
+                      <button
+                        onClick={() => onSelectWorkspace(workspace.id, workspace.name)}
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+                      >
+                        <BarChart3 className="h-4 w-4" />
+                        Analyser
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => onSelectWorkspace(workspace.id, workspace.name)}
+                        className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-medium rounded-lg transition-colors"
+                      >
+                        <Settings className="h-4 w-4" />
+                        Configurer
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    )}
                   </div>
-                  
-                  <button
-                    onClick={() => onSelectWorkspace(workspace.id, workspace.name)}
-                    disabled={!workspace.has_data}
-                    className={`flex items-center gap-2 px-4 py-2 font-medium rounded-lg transition-colors ${
-                      workspace.has_data 
-                        ? 'bg-blue-600 hover:bg-blue-700 text-white' 
-                        : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                    }`}
-                    title={!workspace.has_data ? 'Ce workspace n\'a pas de données - supprimez-le et créez-en un nouveau' : ''}
-                  >
-                    {workspace.has_data ? 'Analyser' : 'Sans données'}
-                    <ChevronRight className="h-4 w-4" />
-                  </button>
-                </div>
 
-                {/* Footer */}
-                <div className="px-4 py-2 bg-gray-50 text-xs text-gray-400 flex items-center gap-1 border-t border-gray-100">
-                  <Calendar className="h-3 w-3" />
-                  Créé le {formatDate(workspace.created_at)}
+                  {/* Footer */}
+                  <div className="px-4 py-2 bg-gray-50 text-xs text-gray-400 flex items-center gap-1 border-t border-gray-100">
+                    <Calendar className="h-3 w-3" />
+                    Créé le {formatDate(workspace.created_at)}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
-        {/* Create Workspace Modal */}
+        {/* Create Workspace Modal - METADATA ONLY */}
         {showCreateModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm overflow-y-auto py-8">
-            <div className="bg-white rounded-2xl p-8 w-full max-w-2xl mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
-              <h2 className="text-2xl font-bold text-gray-900 mb-6">
+            <div className="bg-white rounded-2xl p-8 w-full max-w-lg mx-4 shadow-2xl">
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">
                 Nouveau Workspace
               </h2>
+              <p className="text-gray-500 mb-6 text-sm">
+                Étape 1/2 : Définissez les métadonnées. L'import de données se fera ensuite via "Configurer".
+              </p>
 
               {/* Name Input */}
               <div className="mb-4">
@@ -610,7 +488,7 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                         <p className="font-medium text-gray-900">{info.icon} {info.label}</p>
                         <p className="text-sm text-gray-500">{info.description}</p>
                         <p className="text-xs text-gray-400 mt-1">
-                          Colonnes: {info.columns.join(', ')}
+                          Format CSV: <code className="bg-gray-100 px-1 rounded">{info.columns.join(', ')}</code>
                         </p>
                       </div>
                     </label>
@@ -618,101 +496,18 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                 </div>
               </div>
 
-              {/* Dataset Upload Section - MANDATORY */}
-              <div className="mb-6">
-                <div className="flex items-center gap-2 mb-3">
-                  <label className="block text-sm font-medium text-gray-700">
-                    Dataset initial *
-                  </label>
-                  <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-medium rounded">Obligatoire</span>
+              {/* Info box about next step */}
+              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-start gap-3">
+                  <Settings className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-medium text-blue-800">Étape suivante : Configuration</p>
+                    <p className="text-xs text-blue-600 mt-1">
+                      Après la création, vous pourrez importer votre dataset CSV pour activer le workspace.
+                      Les dashboards et prédictions seront disponibles uniquement après cette configuration.
+                    </p>
+                  </div>
                 </div>
-                <p className="text-sm text-gray-500 mb-3">
-                  Importez un fichier CSV pour configurer et initialiser le workspace.
-                </p>
-
-                {/* Show selected file or upload options */}
-                {uploadedFile ? (
-                  <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <CheckCircle className="h-5 w-5 text-green-600" />
-                        <div>
-                          <p className="font-medium text-gray-900">{uploadedFile.name}</p>
-                          <p className="text-sm text-gray-500">
-                            {uploadMode === 'intelligent' ? 'Upload intelligent (IA)' : 'Upload standard'}
-                          </p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={handleRemoveFile}
-                        className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                      >
-                        <X className="h-5 w-5" />
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="grid md:grid-cols-2 gap-4">
-                    {/* Standard Upload */}
-                    <div className="relative">
-                      <input
-                        type="file"
-                        accept=".csv"
-                        onChange={(e) => handleFileSelect(e, 'standard')}
-                        disabled={uploading || creating}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                      />
-                      <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors h-full ${
-                        'border-gray-300 hover:border-blue-400'
-                      }`}>
-                        <div className="flex flex-col items-center justify-center gap-3">
-                          <Upload className="h-8 w-8 text-gray-400" />
-                          <span className="text-gray-700 font-medium">Upload Standard</span>
-                          <span className="text-gray-500 text-sm">Format attendu uniquement</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Smart Upload with LLM Mapping */}
-                    <div className="relative">
-                      <input
-                        type="file"
-                        accept=".csv"
-                        onChange={(e) => handleFileSelect(e, 'intelligent')}
-                        disabled={uploading || creating}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                      />
-                      <div className="border-2 border-dashed rounded-xl p-6 text-center transition-colors h-full border-yellow-300 hover:border-yellow-500 bg-gradient-to-br from-yellow-50 to-orange-50">
-                        <div className="flex flex-col items-center justify-center gap-3">
-                          <Zap className="h-8 w-8 text-yellow-500" />
-                          <span className="text-gray-700 font-medium">Upload Intelligent</span>
-                          <span className="text-gray-500 text-sm">L'IA suggère les mappings</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Schema hint based on selected data type */}
-                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
-                  <p className="text-blue-800 font-medium mb-1">Format attendu pour {DATA_TYPE_INFO[newWorkspace.data_type as keyof typeof DATA_TYPE_INFO]?.label}:</p>
-                  <code className="text-blue-700 bg-blue-100 px-2 py-1 rounded text-xs">
-                    {DATA_TYPE_INFO[newWorkspace.data_type as keyof typeof DATA_TYPE_INFO]?.columns.join(', ')}
-                  </code>
-                  <p className="text-blue-600 text-xs mt-2">
-                    Assurez-vous que votre fichier CSV contient ces colonnes.
-                  </p>
-                </div>
-
-                {/* Upload Error */}
-                {uploadError && (
-                  <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
-                    <div className="flex items-start gap-2">
-                      <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0" />
-                      <p className="text-sm text-red-700">{uploadError}</p>
-                    </div>
-                  </div>
-                )}
               </div>
 
               {/* Actions */}
@@ -720,9 +515,7 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                 <button
                   onClick={() => {
                     setShowCreateModal(false);
-                    setUploadedFile(null);
-                    setUploadMode(null);
-                    setUploadError(null);
+                    setNewWorkspace({ name: '', description: '', data_type: 'delays' });
                   }}
                   className="flex-1 px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors"
                 >
@@ -730,31 +523,14 @@ export default function WorkspaceDashboard({ onSelectWorkspace }: WorkspaceDashb
                 </button>
                 <button
                   onClick={handleCreateWorkspace}
-                  disabled={creating || !newWorkspace.name.trim() || !uploadedFile}
+                  disabled={creating || !newWorkspace.name.trim()}
                   className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-all"
                 >
-                  {creating ? 'Création en cours...' : 'Créer le Workspace'}
+                  {creating ? 'Création...' : 'Créer le Workspace'}
                 </button>
-                {/* Hint when button is disabled */}
-                {!uploadedFile && newWorkspace.name.trim() && (
-                  <p className="text-xs text-amber-600 mt-2 text-center">
-                    ⚠️ Veuillez importer un dataset pour activer la création
-                  </p>
-                )}
               </div>
             </div>
           </div>
-        )}
-
-        {/* LLM Column Mapper Modal */}
-        {showLLMMapper && llmAnalysis && (
-          <LLMColumnMapper
-            analysis={llmAnalysis}
-            originalColumns={llmAnalysis.column_analysis?.map((c: any) => c.column) || []}
-            onApply={handleApplyMappings}
-            onCancel={handleCancelLLMMapping}
-            loading={false}
-          />
         )}
       </div>
     </div>
