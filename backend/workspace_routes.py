@@ -15,6 +15,7 @@ from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from pydantic import BaseModel, Field
 
 from backend.database import get_db
@@ -2376,3 +2377,852 @@ async def export_report_summary(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erreur de génération du rapport: {str(e)}")
+
+
+# ============================================
+# SUPPLIER MANAGEMENT ENDPOINTS
+# Manage suppliers within a workspace
+# ============================================
+
+class SupplierCreate(BaseModel):
+    """Schema for creating/adding a supplier to a workspace"""
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    category: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class SupplierUpdate(BaseModel):
+    """Schema for updating supplier metadata"""
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = None
+    category: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class OrderCreate(BaseModel):
+    """Schema for manually creating an order record"""
+    supplier_name: str = Field(..., min_length=1)
+    date_promised: Optional[str] = Field(None, description="Date format: YYYY-MM-DD (required for Case A and C)")
+    date_delivered: Optional[str] = Field(None, description="Date format: YYYY-MM-DD")
+    defects: Optional[float] = Field(None, ge=0.0, le=1.0, description="Defect rate 0-1 (required for Case B)")
+    order_reference: Optional[str] = None
+    quantity: Optional[int] = None
+    amount: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class BulkOrderCreate(BaseModel):
+    """Schema for adding multiple orders at once"""
+    orders: List[OrderCreate]
+
+
+@router.get("/{workspace_id}/suppliers", response_model=Dict[str, Any])
+async def list_workspace_suppliers(
+    workspace_id: uuid.UUID,
+    db: Session = Depends(get_db)
+):
+    """
+    List all suppliers in a workspace with their statistics.
+    Data comes from the workspace dataset.
+    """
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    df = get_workspace_dataframe(workspace_id, db)
+    
+    if df is None or df.empty:
+        return {
+            "suppliers": [],
+            "total_count": 0,
+            "message": "Aucun fournisseur. Importez des données pour commencer."
+        }
+    
+    # Get supplier statistics
+    suppliers_data = []
+    for supplier_name in df['supplier'].unique():
+        supplier_df = df[df['supplier'] == supplier_name]
+        
+        stats = {
+            "name": supplier_name,
+            "order_count": len(supplier_df),
+            "first_order": supplier_df['date_promised'].min().strftime("%Y-%m-%d") if 'date_promised' in supplier_df.columns else None,
+            "last_order": supplier_df['date_promised'].max().strftime("%Y-%m-%d") if 'date_promised' in supplier_df.columns else None,
+        }
+        
+        # Add case-specific stats
+        if workspace.data_type in [DataTypeCase.CASE_A, DataTypeCase.CASE_C]:
+            if 'delay' in supplier_df.columns:
+                stats["avg_delay"] = round(supplier_df['delay'].mean(), 2)
+                stats["max_delay"] = int(supplier_df['delay'].max())
+                stats["on_time_rate"] = round((supplier_df['delay'] == 0).sum() / len(supplier_df) * 100, 1)
+        
+        if workspace.data_type in [DataTypeCase.CASE_B, DataTypeCase.CASE_C]:
+            if 'defects' in supplier_df.columns:
+                stats["avg_defects"] = round(supplier_df['defects'].mean() * 100, 2)
+                stats["max_defects"] = round(supplier_df['defects'].max() * 100, 2)
+        
+        suppliers_data.append(stats)
+    
+    # Sort by order count descending
+    suppliers_data.sort(key=lambda x: x['order_count'], reverse=True)
+    
+    return {
+        "suppliers": suppliers_data,
+        "total_count": len(suppliers_data),
+        "workspace_data_type": workspace.data_type.value
+    }
+
+
+@router.post("/{workspace_id}/suppliers", response_model=Dict[str, Any])
+async def add_supplier(
+    workspace_id: uuid.UUID,
+    supplier: SupplierCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    Add a new supplier to a workspace.
+    Creates an empty record - orders need to be added separately.
+    """
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    # Get current dataset
+    dataset = db.query(WorkspaceDataset).filter(
+        WorkspaceDataset.workspace_id == workspace_id,
+        WorkspaceDataset.is_active == True
+    ).first()
+    
+    if dataset:
+        # Check if supplier already exists
+        if supplier.name in dataset.suppliers:
+            raise HTTPException(status_code=400, detail=f"Le fournisseur '{supplier.name}' existe déjà")
+        
+        # Add to suppliers list
+        new_suppliers = dataset.suppliers + [supplier.name]
+        dataset.suppliers = new_suppliers
+        db.commit()
+    else:
+        # Create a new empty dataset with just the supplier
+        new_dataset = WorkspaceDataset(
+            workspace_id=workspace_id,
+            filename="manual_entry.csv",
+            row_count=0,
+            column_count=4,
+            suppliers=[supplier.name],
+            data_json=[],
+            is_active=True
+        )
+        db.add(new_dataset)
+        db.commit()
+        db.refresh(new_dataset)
+    
+    return {
+        "success": True,
+        "message": f"Fournisseur '{supplier.name}' ajouté avec succès",
+        "supplier": {
+            "name": supplier.name,
+            "description": supplier.description,
+            "category": supplier.category
+        }
+    }
+
+
+@router.delete("/{workspace_id}/suppliers/{supplier_name}", response_model=Dict[str, Any])
+async def remove_supplier(
+    workspace_id: uuid.UUID,
+    supplier_name: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Remove a supplier and all their orders from the workspace.
+    This is a destructive operation!
+    """
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    dataset = db.query(WorkspaceDataset).filter(
+        WorkspaceDataset.workspace_id == workspace_id,
+        WorkspaceDataset.is_active == True
+    ).first()
+    
+    if not dataset:
+        raise HTTPException(status_code=400, detail="Aucune donnée dans ce workspace")
+    
+    # Check if supplier exists
+    if supplier_name not in dataset.suppliers:
+        raise HTTPException(status_code=404, detail=f"Fournisseur '{supplier_name}' non trouvé")
+    
+    # Remove supplier from list
+    new_suppliers = [s for s in dataset.suppliers if s != supplier_name]
+    
+    # Remove orders from data
+    data = dataset.data_json or []
+    new_data = [row for row in data if row.get('supplier') != supplier_name]
+    
+    # Update dataset
+    dataset.suppliers = new_suppliers
+    dataset.data_json = new_data
+    dataset.row_count = len(new_data)
+    
+    db.commit()
+    
+    return {
+        "success": True,
+        "message": f"Fournisseur '{supplier_name}' supprimé avec succès",
+        "removed_orders": len(data) - len(new_data),
+        "remaining_suppliers": len(new_suppliers)
+    }
+
+
+# ============================================
+# ORDER MANAGEMENT ENDPOINTS
+# Add/manage orders within a workspace
+# ============================================
+
+@router.get("/{workspace_id}/suppliers/{supplier_name}/orders", response_model=Dict[str, Any])
+async def get_supplier_orders(
+    workspace_id: uuid.UUID,
+    supplier_name: str,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db)
+):
+    """
+    Get orders for a specific supplier in the workspace.
+    """
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    df = get_workspace_dataframe(workspace_id, db)
+    
+    if df is None or df.empty:
+        raise HTTPException(status_code=400, detail="Aucune donnée disponible")
+    
+    # Filter by supplier
+    supplier_df = df[df['supplier'] == supplier_name]
+    
+    if supplier_df.empty:
+        raise HTTPException(status_code=404, detail=f"Fournisseur '{supplier_name}' non trouvé")
+    
+    # Paginate
+    total = len(supplier_df)
+    supplier_df = supplier_df.iloc[offset:offset + limit]
+    
+    # Convert to list of dicts
+    orders = []
+    for _, row in supplier_df.iterrows():
+        order = {
+            "supplier": row['supplier'],
+            "date_promised": row['date_promised'].strftime("%Y-%m-%d") if pd.notna(row.get('date_promised')) else None,
+            "date_delivered": row['date_delivered'].strftime("%Y-%m-%d") if pd.notna(row.get('date_delivered')) else None,
+        }
+        
+        if 'delay' in row:
+            order['delay'] = int(row['delay']) if pd.notna(row['delay']) else 0
+        if 'defects' in row:
+            order['defects'] = round(float(row['defects']), 4) if pd.notna(row['defects']) else 0.0
+        if 'order_reference' in row:
+            order['order_reference'] = row['order_reference']
+        if 'quantity' in row:
+            order['quantity'] = int(row['quantity']) if pd.notna(row['quantity']) else None
+        if 'amount' in row:
+            order['amount'] = float(row['amount']) if pd.notna(row['amount']) else None
+        
+        orders.append(order)
+    
+    return {
+        "supplier": supplier_name,
+        "orders": orders,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < total
+    }
+
+
+@router.post("/{workspace_id}/orders", response_model=Dict[str, Any])
+async def add_manual_order(
+    workspace_id: uuid.UUID,
+    order: OrderCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    Add a single order manually to the workspace.
+    The order will be validated based on workspace data_type:
+    - Case A (delays): requires date_promised, date_delivered optional
+    - Case B (late_days): requires defects
+    - Case C (mixed): requires date_promised and defects
+    
+    After successful insertion:
+    - Dataset is updated with the new order
+    - Frontend should refetch dashboard to reflect updated KPIs, predictions, and charts
+    """
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    data_type = workspace.data_type or "delays"
+    
+    # Case-specific validation
+    date_promised = None
+    date_delivered = None
+    delay = 0
+    
+    if data_type in ["delays", "mixed"]:
+        # Case A and C require dates
+        if not order.date_promised:
+            raise HTTPException(status_code=400, detail="Date promise requise pour ce type de workspace")
+        try:
+            date_promised = datetime.strptime(order.date_promised, "%Y-%m-%d")
+            date_delivered = datetime.strptime(order.date_delivered, "%Y-%m-%d") if order.date_delivered else date_promised
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Format de date invalide. Utilisez YYYY-MM-DD")
+        # Calculate delay
+        delay = max((date_delivered - date_promised).days, 0)
+    
+    if data_type == "late_days":
+        # Case B requires defects
+        if order.defects is None:
+            raise HTTPException(status_code=400, detail="Taux de défauts requis pour ce type de workspace")
+    
+    try:
+        # Get current dataset
+        dataset = db.query(WorkspaceDataset).filter(
+            WorkspaceDataset.workspace_id == workspace_id,
+            WorkspaceDataset.is_active == True
+        ).first()
+        
+        # Create order record based on case type
+        new_order = {
+            "supplier": order.supplier_name,
+        }
+        
+        # Add date fields for Case A and C
+        if data_type in ["delays", "mixed"]:
+            new_order["date_promised"] = order.date_promised
+            new_order["date_delivered"] = order.date_delivered or order.date_promised
+            new_order["delay"] = delay
+        
+        # Add defects field for Case B and C
+        if data_type in ["late_days", "mixed"]:
+            new_order["defects"] = order.defects if order.defects is not None else 0.0
+        
+        # Add optional fields
+        if order.order_reference:
+            new_order["order_reference"] = order.order_reference
+        if order.quantity is not None:
+            new_order["quantity"] = order.quantity
+        if order.amount is not None:
+            new_order["amount"] = order.amount
+        if order.notes:
+            new_order["notes"] = order.notes
+        
+        new_dataset = None
+        if dataset:
+            # Merge with existing data
+            # IMPORTANT: Create a NEW list to ensure SQLAlchemy detects the change
+            # SQLAlchemy doesn't detect in-place mutations of JSON columns
+            data = list(dataset.data_json or [])
+            data.append(new_order)
+            
+            # Update suppliers list if new supplier (also create new list)
+            suppliers = list(dataset.suppliers or [])
+            if order.supplier_name not in suppliers:
+                suppliers.append(order.supplier_name)
+            
+            # Update date range (only for Case A and C which have dates)
+            date_start = dataset.date_start
+            date_end = dataset.date_end
+            
+            if order.date_promised and data_type in ["delays", "mixed"]:
+                new_date = datetime.strptime(order.date_promised, "%Y-%m-%d")
+                # Ensure date comparison works by making dates naive (remove timezone info if present)
+                if date_start is not None and hasattr(date_start, 'tzinfo') and date_start.tzinfo is not None:
+                    date_start = date_start.replace(tzinfo=None)
+                if date_end is not None and hasattr(date_end, 'tzinfo') and date_end.tzinfo is not None:
+                    date_end = date_end.replace(tzinfo=None)
+                
+                if date_start is None or new_date < date_start:
+                    date_start = new_date
+                if date_end is None or new_date > date_end:
+                    date_end = new_date
+            
+            # Update dataset - assign new lists to trigger SQLAlchemy change detection
+            dataset.data_json = data
+            dataset.row_count = len(data)
+            dataset.suppliers = suppliers
+            dataset.date_start = date_start
+            dataset.date_end = date_end
+            
+            # Explicitly mark JSON columns as modified to ensure SQLAlchemy persists them
+            flag_modified(dataset, 'data_json')
+            flag_modified(dataset, 'suppliers')
+            
+            db.commit()
+        else:
+            # Create new dataset
+            new_dataset = WorkspaceDataset(
+                workspace_id=workspace_id,
+                filename="manual_entry.csv",
+                row_count=1,
+                column_count=len(new_order),
+                suppliers=[order.supplier_name],
+                date_start=date_promised,  # Will be None for Case B
+                date_end=date_promised,    # Will be None for Case B
+                data_json=[new_order],
+                is_active=True
+            )
+            db.add(new_dataset)
+            db.commit()
+        
+        # Refresh dataset reference after commit to get updated row count
+        db.refresh(dataset if dataset else new_dataset)
+        updated_dataset = dataset if dataset else new_dataset
+        
+        return {
+            "success": True,
+            "message": "Commande ajoutée avec succès",
+            "order": new_order,
+            "dataset_updated": True,
+            "new_row_count": updated_dataset.row_count,
+            "refresh_required": True,  # Signal frontend to refresh dashboard
+            "supplier_updated": order.supplier_name
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Rollback any partial changes on error
+        db.rollback()
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Erreur lors de l'ajout de la commande: {str(e)}. Les modifications ont été annulées."
+        )
+
+
+@router.post("/{workspace_id}/orders/bulk", response_model=Dict[str, Any])
+async def add_bulk_orders(
+    workspace_id: uuid.UUID,
+    bulk_data: BulkOrderCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    Add multiple orders at once to the workspace.
+    All orders are validated and merged with existing data.
+    """
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    if not bulk_data.orders:
+        raise HTTPException(status_code=400, detail="Aucune commande fournie")
+    
+    # Get current dataset
+    dataset = db.query(WorkspaceDataset).filter(
+        WorkspaceDataset.workspace_id == workspace_id,
+        WorkspaceDataset.is_active == True
+    ).first()
+    
+    # Process orders
+    new_orders = []
+    errors = []
+    new_suppliers = set()
+    
+    for i, order in enumerate(bulk_data.orders):
+        try:
+            # Validate dates
+            date_promised = datetime.strptime(order.date_promised, "%Y-%m-%d")
+            date_delivered = datetime.strptime(order.date_delivered, "%Y-%m-%d") if order.date_delivered else date_promised
+            delay = max((date_delivered - date_promised).days, 0)
+            
+            new_order = {
+                "supplier": order.supplier_name,
+                "date_promised": order.date_promised,
+                "date_delivered": order.date_delivered or order.date_promised,
+                "delay": delay,
+                "defects": order.defects or 0.0
+            }
+            
+            if order.order_reference:
+                new_order["order_reference"] = order.order_reference
+            if order.quantity is not None:
+                new_order["quantity"] = order.quantity
+            if order.amount is not None:
+                new_order["amount"] = order.amount
+            
+            new_orders.append(new_order)
+            new_suppliers.add(order.supplier_name)
+            
+        except ValueError as e:
+            errors.append(f"Ligne {i + 1}: {str(e)}")
+    
+    if not new_orders:
+        raise HTTPException(status_code=400, detail={"message": "Aucune commande valide", "errors": errors})
+    
+    # Merge with existing data
+    if dataset:
+        # Create NEW list to ensure SQLAlchemy detects the change
+        data = list(dataset.data_json or [])
+        data.extend(new_orders)
+        
+        suppliers = set(dataset.suppliers or [])
+        suppliers.update(new_suppliers)
+        
+        # Recalculate date range
+        all_dates = [datetime.strptime(o['date_promised'], "%Y-%m-%d") for o in data]
+        date_start = min(all_dates) if all_dates else None
+        date_end = max(all_dates) if all_dates else None
+        
+        dataset.data_json = data
+        dataset.row_count = len(data)
+        dataset.suppliers = list(suppliers)
+        dataset.date_start = date_start
+        dataset.date_end = date_end
+        
+        # Explicitly mark JSON columns as modified
+        flag_modified(dataset, 'data_json')
+        flag_modified(dataset, 'suppliers')
+        
+        db.commit()
+    else:
+        # Calculate date range
+        all_dates = [datetime.strptime(o['date_promised'], "%Y-%m-%d") for o in new_orders]
+        
+        new_dataset = WorkspaceDataset(
+            workspace_id=workspace_id,
+            filename="manual_entry.csv",
+            row_count=len(new_orders),
+            column_count=5,
+            suppliers=list(new_suppliers),
+            date_start=min(all_dates) if all_dates else None,
+            date_end=max(all_dates) if all_dates else None,
+            data_json=new_orders,
+            is_active=True
+        )
+        db.add(new_dataset)
+        db.commit()
+    
+    # Refresh dataset reference after commit
+    db.refresh(dataset if dataset else new_dataset)
+    updated_dataset = dataset if dataset else new_dataset
+    
+    return {
+        "success": True,
+        "message": f"{len(new_orders)} commandes ajoutées avec succès",
+        "added_count": len(new_orders),
+        "error_count": len(errors),
+        "errors": errors if errors else None,
+        "new_suppliers": list(new_suppliers),
+        "dataset_updated": True,
+        "new_row_count": updated_dataset.row_count,
+        "refresh_required": True  # Signal frontend to refresh dashboard
+    }
+
+
+@router.post("/{workspace_id}/suppliers/{supplier_name}/upload", response_model=Dict[str, Any])
+async def upload_supplier_csv(
+    workspace_id: uuid.UUID,
+    supplier_name: str,
+    file: UploadFile = File(...),
+    merge_mode: str = Query("append", description="'append' or 'replace'"),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload CSV data for a specific supplier.
+    Data is validated and merged with existing workspace data.
+    
+    merge_mode:
+    - 'append': Add new orders to existing data
+    - 'replace': Replace all orders for this supplier
+    """
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Format invalide. Fichier CSV requis.")
+    
+    try:
+        # Read CSV
+        content = await file.read()
+        df = pd.read_csv(io.BytesIO(content))
+        
+        if df.empty:
+            raise HTTPException(status_code=400, detail="Le fichier CSV est vide.")
+        
+        # Override supplier column with the specified supplier name
+        df['supplier'] = supplier_name
+        
+        # Validate against workspace data type
+        errors = validate_csv_for_case(df, workspace.data_type)
+        if errors:
+            raise HTTPException(
+                status_code=400,
+                detail={"message": "Erreurs de validation", "errors": errors}
+            )
+        
+        # Process data
+        processed_df = process_csv_for_case(df, workspace.data_type)
+        
+        # Get current dataset
+        dataset = db.query(WorkspaceDataset).filter(
+            WorkspaceDataset.workspace_id == workspace_id,
+            WorkspaceDataset.is_active == True
+        ).first()
+        
+        # Convert processed data to list of dicts
+        new_orders = processed_df.to_dict(orient='records')
+        for order in new_orders:
+            # Convert dates to strings
+            for col in ['date_promised', 'date_delivered', 'order_date']:
+                if col in order and pd.notna(order[col]):
+                    if isinstance(order[col], (datetime, pd.Timestamp)):
+                        order[col] = order[col].strftime("%Y-%m-%d")
+        
+        if dataset:
+            # Create NEW list to ensure SQLAlchemy detects the change
+            existing_data = list(dataset.data_json or [])
+            
+            if merge_mode == "replace":
+                # Remove existing orders for this supplier
+                existing_data = [o for o in existing_data if o.get('supplier') != supplier_name]
+            
+            # Add new orders
+            existing_data.extend(new_orders)
+            
+            # Update suppliers list
+            suppliers = set(dataset.suppliers or [])
+            suppliers.add(supplier_name)
+            
+            # Recalculate date range
+            date_col = "date_promised" if any('date_promised' in o for o in existing_data) else "order_date"
+            all_dates = []
+            for o in existing_data:
+                if date_col in o and o[date_col]:
+                    try:
+                        all_dates.append(datetime.strptime(o[date_col], "%Y-%m-%d"))
+                    except:
+                        pass
+            
+            dataset.data_json = existing_data
+            dataset.row_count = len(existing_data)
+            dataset.suppliers = list(suppliers)
+            dataset.date_start = min(all_dates) if all_dates else None
+            dataset.date_end = max(all_dates) if all_dates else None
+            
+            # Explicitly mark JSON columns as modified
+            flag_modified(dataset, 'data_json')
+            flag_modified(dataset, 'suppliers')
+            
+            db.commit()
+        else:
+            # Create new dataset
+            date_col = "date_promised" if "date_promised" in processed_df.columns else "order_date"
+            date_start = processed_df[date_col].min() if date_col in processed_df.columns else None
+            date_end = processed_df[date_col].max() if date_col in processed_df.columns else None
+            
+            new_dataset = WorkspaceDataset(
+                workspace_id=workspace_id,
+                filename=f"{supplier_name}_{file.filename}",
+                row_count=len(new_orders),
+                column_count=len(processed_df.columns),
+                suppliers=[supplier_name],
+                date_start=date_start.to_pydatetime() if pd.notna(date_start) else None,
+                date_end=date_end.to_pydatetime() if pd.notna(date_end) else None,
+                data_json=new_orders,
+                is_active=True
+            )
+            db.add(new_dataset)
+            db.commit()
+        
+        # Refresh to get updated data
+        db.refresh(dataset if dataset else new_dataset)
+        updated_dataset = dataset if dataset else new_dataset
+        
+        return {
+            "success": True,
+            "message": f"{len(new_orders)} commandes importées pour {supplier_name}",
+            "supplier": supplier_name,
+            "orders_added": len(new_orders),
+            "merge_mode": merge_mode,
+            "dataset_updated": True,
+            "new_row_count": updated_dataset.row_count,
+            "refresh_required": True  # Signal frontend to refresh dashboard
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erreur de traitement: {str(e)}")
+
+
+@router.post("/{workspace_id}/suppliers/{supplier_name}/upload/smart", response_model=Dict[str, Any])
+async def smart_upload_supplier_csv(
+    workspace_id: uuid.UUID,
+    supplier_name: str,
+    file: UploadFile = File(...),
+    merge_mode: str = Query("append", description="'append' or 'replace'"),
+    db: Session = Depends(get_db)
+):
+    """
+    Smart upload CSV data for a specific supplier using LLM-based column mapping.
+    Automatically detects and maps columns to the expected schema.
+    """
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace non trouvé")
+    
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Format invalide. Fichier CSV requis.")
+    
+    try:
+        # Read CSV
+        content = await file.read()
+        df = pd.read_csv(io.BytesIO(content))
+        
+        if df.empty:
+            raise HTTPException(status_code=400, detail="Le fichier CSV est vide.")
+        
+        # Analyze CSV with LLM-style detection
+        analysis = analyze_csv_for_mapping(df)
+        
+        # Check confidence
+        all_high_confidence = all(
+            m["confidence"] > 0.7 
+            for m in analysis["mappings"] 
+            if m["target_role"] != "ignore"
+        )
+        
+        if not all_high_confidence:
+            # Return analysis for manual review
+            import base64
+            return {
+                "success": False,
+                "needs_review": True,
+                "message": "Certaines colonnes nécessitent une vérification manuelle",
+                "analysis": analysis,
+                "csv_content": base64.b64encode(content).decode('utf-8')
+            }
+        
+        # Apply mappings
+        target_case = {
+            DataTypeCase.CASE_A: "delay_only",
+            DataTypeCase.CASE_B: "defects_only",
+            DataTypeCase.CASE_C: "mixed"
+        }.get(workspace.data_type, "mixed")
+        
+        result = process_csv_with_llm_mapping(
+            df, 
+            user_mappings=analysis["mappings"],
+            target_case=target_case
+        )
+        
+        if not result.success:
+            return {
+                "success": False,
+                "message": "Échec de la normalisation",
+                "errors": [w.message for w in result.warnings if w.severity == "error"]
+            }
+        
+        # Override supplier column
+        processed_df = result.dataframe
+        processed_df['supplier'] = supplier_name
+        
+        # Get current dataset
+        dataset = db.query(WorkspaceDataset).filter(
+            WorkspaceDataset.workspace_id == workspace_id,
+            WorkspaceDataset.is_active == True
+        ).first()
+        
+        # Convert to list of dicts
+        new_orders = processed_df.to_dict(orient='records')
+        for order in new_orders:
+            for col in ['date_promised', 'date_delivered', 'order_date']:
+                if col in order and pd.notna(order[col]):
+                    if isinstance(order[col], (datetime, pd.Timestamp)):
+                        order[col] = order[col].strftime("%Y-%m-%d")
+        
+        if dataset:
+            # Create NEW list to ensure SQLAlchemy detects the change
+            existing_data = list(dataset.data_json or [])
+            
+            if merge_mode == "replace":
+                existing_data = [o for o in existing_data if o.get('supplier') != supplier_name]
+            
+            existing_data.extend(new_orders)
+            
+            suppliers = set(dataset.suppliers or [])
+            suppliers.add(supplier_name)
+            
+            # Recalculate date range
+            date_col = "date_promised"
+            all_dates = []
+            for o in existing_data:
+                if date_col in o and o[date_col]:
+                    try:
+                        all_dates.append(datetime.strptime(o[date_col], "%Y-%m-%d"))
+                    except:
+                        pass
+            
+            dataset.data_json = existing_data
+            dataset.row_count = len(existing_data)
+            dataset.suppliers = list(suppliers)
+            dataset.date_start = min(all_dates) if all_dates else None
+            dataset.date_end = max(all_dates) if all_dates else None
+            
+            # Explicitly mark JSON columns as modified
+            flag_modified(dataset, 'data_json')
+            flag_modified(dataset, 'suppliers')
+            
+            db.commit()
+        else:
+            date_col = "date_promised"
+            all_dates = [datetime.strptime(o[date_col], "%Y-%m-%d") for o in new_orders if date_col in o and o[date_col]]
+            
+            new_dataset = WorkspaceDataset(
+                workspace_id=workspace_id,
+                filename=f"{supplier_name}_{file.filename}",
+                row_count=len(new_orders),
+                column_count=len(processed_df.columns),
+                suppliers=[supplier_name],
+                date_start=min(all_dates) if all_dates else None,
+                date_end=max(all_dates) if all_dates else None,
+                data_json=new_orders,
+                is_active=True
+            )
+            db.add(new_dataset)
+            db.commit()
+        
+        # Refresh to get updated data
+        db.refresh(dataset if dataset else new_dataset)
+        updated_dataset = dataset if dataset else new_dataset
+        
+        return {
+            "success": True,
+            "message": f"{len(new_orders)} commandes importées intelligemment pour {supplier_name}",
+            "supplier": supplier_name,
+            "orders_added": len(new_orders),
+            "merge_mode": merge_mode,
+            "detected_mappings": analysis["mappings"],
+            "dataset_updated": True,
+            "new_row_count": updated_dataset.row_count,
+            "refresh_required": True  # Signal frontend to refresh dashboard
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erreur de traitement: {str(e)}")
+

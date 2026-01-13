@@ -17,7 +17,8 @@ import {
   ArrowLeft, Database, Settings, FileText, Download, Upload,
   AlertCircle, CheckCircle, TrendingUp, TrendingDown, Activity,
   BarChart3, PieChart as PieChartIcon, Filter, Plus, X, Trash2,
-  RefreshCw, FileSpreadsheet, Table, FileDown, Zap, PlayCircle
+  RefreshCw, FileSpreadsheet, Table, FileDown, Zap, PlayCircle,
+  FolderOpen, Users, Package, Calendar as CalendarIcon, Edit, Eye
 } from 'lucide-react';
 import LLMColumnMapper from './LLMColumnMapper';
 import { AppLogo } from './app-logo';
@@ -165,7 +166,38 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
   const [dashboardError, setDashboardError] = useState<string | null>(null);
 
   // UI state - default to 'setup' tab (metadata view) instead of 'overview'
-  const [activeTab, setActiveTab] = useState<'setup' | 'overview' | 'predictions' | 'models' | 'kpis' | 'export'>('setup');
+  const [activeTab, setActiveTab] = useState<'setup' | 'suppliers' | 'overview' | 'predictions' | 'models' | 'kpis' | 'export'>('setup');
+  
+  // Supplier management state
+  const [suppliersData, setSuppliersData] = useState<any[]>([]);
+  const [loadingSuppliers, setLoadingSuppliers] = useState(false);
+  const [selectedSupplierForOrders, setSelectedSupplierForOrders] = useState<string | null>(null);
+  const [supplierOrders, setSupplierOrders] = useState<any[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  
+  // Add supplier modal state
+  const [showAddSupplierModal, setShowAddSupplierModal] = useState(false);
+  const [newSupplierForm, setNewSupplierForm] = useState({ name: '', description: '', category: '' });
+  const [addingSupplier, setAddingSupplier] = useState(false);
+  
+  // Add order modal state
+  const [showAddOrderModal, setShowAddOrderModal] = useState(false);
+  const [newOrderForm, setNewOrderForm] = useState({
+    supplier_name: '',
+    date_promised: '',
+    date_delivered: '',
+    defects: 0,
+    order_reference: '',
+    quantity: 0,
+    notes: ''
+  });
+  const [addingOrder, setAddingOrder] = useState(false);
+  
+  // CSV upload for supplier state
+  const [showSupplierUploadModal, setShowSupplierUploadModal] = useState(false);
+  const [uploadingSupplierCSV, setUploadingSupplierCSV] = useState(false);
+  const [supplierUploadMode, setSupplierUploadMode] = useState<'standard' | 'intelligent'>('standard');
+  const [mergeMode, setMergeMode] = useState<'append' | 'replace'>('append');
   
   // Filter state
   const [selectedSupplier, setSelectedSupplier] = useState<string>('all');
@@ -622,6 +654,229 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
       alert(errorMessage);
     }
   };
+
+  // ============================================
+  // SUPPLIER MANAGEMENT FUNCTIONS
+  // ============================================
+
+  // Fetch all suppliers in the workspace
+  const fetchSuppliers = useCallback(async () => {
+    setLoadingSuppliers(true);
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/workspaces/${workspaceId}/suppliers`);
+      setSuppliersData(response.data.suppliers || []);
+    } catch (err) {
+      console.error('Error fetching suppliers:', err);
+      setSuppliersData([]);
+    } finally {
+      setLoadingSuppliers(false);
+    }
+  }, [workspaceId]);
+
+  // Fetch orders for a specific supplier
+  const fetchSupplierOrders = useCallback(async (supplierName: string) => {
+    setLoadingOrders(true);
+    try {
+      const response = await axios.get(
+        `${API_BASE_URL}/api/workspaces/${workspaceId}/suppliers/${encodeURIComponent(supplierName)}/orders`
+      );
+      setSupplierOrders(response.data.orders || []);
+    } catch (err) {
+      console.error('Error fetching supplier orders:', err);
+      setSupplierOrders([]);
+    } finally {
+      setLoadingOrders(false);
+    }
+  }, [workspaceId]);
+
+  // Add a new supplier
+  const handleAddSupplier = async () => {
+    if (!newSupplierForm.name.trim()) {
+      alert('Veuillez entrer un nom de fournisseur');
+      return;
+    }
+
+    setAddingSupplier(true);
+    try {
+      await axios.post(`${API_BASE_URL}/api/workspaces/${workspaceId}/suppliers`, newSupplierForm);
+      setShowAddSupplierModal(false);
+      setNewSupplierForm({ name: '', description: '', category: '' });
+      await fetchSuppliers();
+      await fetchWorkspaceInfo(); // Refresh workspace info to update supplier list
+    } catch (err: any) {
+      const message = err?.response?.data?.detail || 'Erreur lors de l\'ajout du fournisseur';
+      alert(message);
+    } finally {
+      setAddingSupplier(false);
+    }
+  };
+
+  // Remove a supplier
+  const handleRemoveSupplier = async (supplierName: string) => {
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer "${supplierName}" et toutes ses commandes ?`)) {
+      return;
+    }
+
+    try {
+      await axios.delete(`${API_BASE_URL}/api/workspaces/${workspaceId}/suppliers/${encodeURIComponent(supplierName)}`);
+      await fetchSuppliers();
+      await fetchWorkspaceInfo();
+      if (selectedSupplierForOrders === supplierName) {
+        setSelectedSupplierForOrders(null);
+        setSupplierOrders([]);
+      }
+      // Reset dashboard to force recalculation
+      if (dashboardActivated) {
+        setDashboardActivated(false);
+        setDashboardData(null);
+      }
+    } catch (err: any) {
+      const message = err?.response?.data?.detail || 'Erreur lors de la suppression';
+      alert(message);
+    }
+  };
+
+  // Add a single order manually
+  const handleAddOrder = async () => {
+    const dataType = workspaceInfo?.workspace?.data_type || 'delays';
+    
+    // Case-specific validation
+    if (!newOrderForm.supplier_name) {
+      alert('Veuillez sélectionner un fournisseur');
+      return;
+    }
+    
+    if (dataType === 'delays' || dataType === 'mixed') {
+      // Case A and C require dates
+      if (!newOrderForm.date_promised) {
+        alert('Veuillez remplir la date promise');
+        return;
+      }
+    }
+    
+    if (dataType === 'late_days') {
+      // Case B requires defects
+      if (newOrderForm.defects === undefined || newOrderForm.defects === null) {
+        alert('Veuillez remplir le taux de défauts');
+        return;
+      }
+    }
+
+    setAddingOrder(true);
+    try {
+      // Build payload based on case type
+      const payload: any = {
+        supplier_name: newOrderForm.supplier_name,
+        order_reference: newOrderForm.order_reference,
+        quantity: newOrderForm.quantity,
+        notes: newOrderForm.notes
+      };
+      
+      // Add date fields for Case A and C
+      if (dataType === 'delays' || dataType === 'mixed') {
+        payload.date_promised = newOrderForm.date_promised;
+        payload.date_delivered = newOrderForm.date_delivered || null;
+      }
+      
+      // Add defects field for Case B and C
+      if (dataType === 'late_days' || dataType === 'mixed') {
+        payload.defects = newOrderForm.defects;
+      }
+      
+      await axios.post(`${API_BASE_URL}/api/workspaces/${workspaceId}/orders`, payload);
+      setShowAddOrderModal(false);
+      setNewOrderForm({
+        supplier_name: '',
+        date_promised: '',
+        date_delivered: '',
+        defects: 0,
+        order_reference: '',
+        quantity: 0,
+        notes: ''
+      });
+      
+      // Refresh all data sources to reflect the new order
+      await Promise.all([
+        fetchSuppliers(),
+        fetchWorkspaceInfo()
+      ]);
+      
+      // Refresh supplier orders if viewing the same supplier
+      if (selectedSupplierForOrders === newOrderForm.supplier_name) {
+        await fetchSupplierOrders(newOrderForm.supplier_name);
+      }
+      
+      // If dashboard was already activated, automatically refetch to show updated data
+      // This ensures KPIs, predictions, and charts reflect the new order
+      if (dashboardActivated) {
+        setDashboardData(null); // Clear stale data
+        await fetchDashboardData(); // Refetch with updated dataset
+      }
+    } catch (err: any) {
+      const message = err?.response?.data?.detail || 'Erreur lors de l\'ajout de la commande';
+      alert(message);
+    } finally {
+      setAddingOrder(false);
+    }
+  };
+
+  // Upload CSV for a specific supplier
+  const handleSupplierCSVUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedSupplierForOrders) return;
+
+    setUploadingSupplierCSV(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const endpoint = supplierUploadMode === 'intelligent' 
+        ? `${API_BASE_URL}/api/workspaces/${workspaceId}/suppliers/${encodeURIComponent(selectedSupplierForOrders)}/upload/smart?merge_mode=${mergeMode}`
+        : `${API_BASE_URL}/api/workspaces/${workspaceId}/suppliers/${encodeURIComponent(selectedSupplierForOrders)}/upload?merge_mode=${mergeMode}`;
+
+      const response = await axios.post(endpoint, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      if (response.data.needs_review) {
+        alert('Le fichier nécessite une vérification manuelle des colonnes. Utilisez l\'upload standard ou corrigez le format.');
+      } else {
+        alert(`${response.data.orders_added} commandes importées avec succès`);
+        setShowSupplierUploadModal(false);
+        
+        // Refresh all data sources to reflect the new orders
+        await Promise.all([
+          fetchSuppliers(),
+          fetchSupplierOrders(selectedSupplierForOrders),
+          fetchWorkspaceInfo()
+        ]);
+        
+        // If dashboard was already activated, automatically refetch to show updated data
+        // This ensures KPIs, predictions, and charts reflect the new orders
+        if (dashboardActivated) {
+          setDashboardData(null); // Clear stale data
+          await fetchDashboardData(); // Refetch with updated dataset
+        }
+      }
+    } catch (err: any) {
+      const message = err?.response?.data?.detail || 'Erreur lors de l\'import CSV';
+      if (typeof message === 'object' && message.errors) {
+        alert(`Erreurs de validation:\n${message.errors.join('\n')}`);
+      } else {
+        alert(message);
+      }
+    } finally {
+      setUploadingSupplierCSV(false);
+      e.target.value = ''; // Reset file input
+    }
+  };
+
+  // Fetch suppliers when switching to suppliers tab
+  useEffect(() => {
+    if (activeTab === 'suppliers') {
+      fetchSuppliers();
+    }
+  }, [activeTab, fetchSuppliers]);
 
   // ============================================
   // CHART DATA PREPARATION
@@ -1086,6 +1341,7 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
         <div className="flex gap-2 mb-6 flex-wrap">
           {[
             { key: 'setup', icon: Database, label: 'Configuration', requiresDashboard: false },
+            { key: 'suppliers', icon: FolderOpen, label: 'Fournisseurs', requiresDashboard: false },
             { key: 'models', icon: Settings, label: 'Modèles', requiresDashboard: false },
             { key: 'kpis', icon: Activity, label: 'KPIs', requiresDashboard: false },
             { key: 'overview', icon: BarChart3, label: 'Vue générale', requiresDashboard: true },
@@ -1262,6 +1518,522 @@ export default function WorkspaceView({ workspaceId, workspaceName, onBack }: Wo
                       Charger le Dashboard
                     </>
                   )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================
+            SUPPLIERS TAB - Manage suppliers and orders
+            ============================================ */}
+        {activeTab === 'suppliers' && (
+          <div className="space-y-6">
+            {/* Header with Add buttons */}
+            <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Gestion des Fournisseurs</h2>
+                <p className="text-gray-500 text-sm">Ajoutez et gérez les fournisseurs et leurs commandes</p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowAddSupplierModal(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <Plus className="h-4 w-4" />
+                  Ajouter Fournisseur
+                </button>
+                <button
+                  onClick={() => {
+                    setNewOrderForm({ ...newOrderForm, supplier_name: suppliersData[0]?.name || '' });
+                    setShowAddOrderModal(true);
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                >
+                  <Package className="h-4 w-4" />
+                  Ajouter Commande
+                </button>
+              </div>
+            </div>
+
+            {/* Suppliers Grid */}
+            <div className="grid lg:grid-cols-2 gap-6">
+              {/* Suppliers List */}
+              <div className="bg-white rounded-xl shadow overflow-hidden">
+                <div className="p-4 border-b border-gray-200 bg-gray-50">
+                  <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <Users className="h-5 w-5 text-blue-600" />
+                    Fournisseurs ({suppliersData.length})
+                  </h3>
+                </div>
+                
+                {loadingSuppliers ? (
+                  <div className="p-8 text-center">
+                    <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                    <p className="mt-2 text-gray-500">Chargement...</p>
+                  </div>
+                ) : suppliersData.length === 0 ? (
+                  <div className="p-8 text-center">
+                    <Users className="h-12 w-12 mx-auto text-gray-300 mb-3" />
+                    <p className="text-gray-500">Aucun fournisseur</p>
+                    <p className="text-gray-400 text-sm">Ajoutez un fournisseur ou importez des données</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-gray-100 max-h-[500px] overflow-y-auto">
+                    {suppliersData.map((supplier) => (
+                      <div
+                        key={supplier.name}
+                        className={`p-4 hover:bg-gray-50 cursor-pointer transition-colors ${
+                          selectedSupplierForOrders === supplier.name ? 'bg-blue-50 border-l-4 border-blue-500' : ''
+                        }`}
+                        onClick={() => {
+                          setSelectedSupplierForOrders(supplier.name);
+                          fetchSupplierOrders(supplier.name);
+                        }}
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <h4 className="font-medium text-gray-900">{supplier.name}</h4>
+                            <div className="flex flex-wrap gap-3 mt-2 text-sm text-gray-500">
+                              <span className="flex items-center gap-1">
+                                <Package className="h-3 w-3" />
+                                {supplier.order_count} commandes
+                              </span>
+                              {supplier.avg_delay !== undefined && (
+                                <span className={`flex items-center gap-1 ${supplier.avg_delay > 2 ? 'text-red-500' : 'text-green-500'}`}>
+                                  <CalendarIcon className="h-3 w-3" />
+                                  Retard moy: {supplier.avg_delay}j
+                                </span>
+                              )}
+                              {supplier.avg_defects !== undefined && (
+                                <span className={`flex items-center gap-1 ${supplier.avg_defects > 5 ? 'text-red-500' : 'text-green-500'}`}>
+                                  <AlertCircle className="h-3 w-3" />
+                                  Défauts: {supplier.avg_defects}%
+                                </span>
+                              )}
+                            </div>
+                            {supplier.first_order && (
+                              <p className="text-xs text-gray-400 mt-1">
+                                {supplier.first_order} → {supplier.last_order}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex gap-1">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedSupplierForOrders(supplier.name);
+                                setShowSupplierUploadModal(true);
+                              }}
+                              className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              title="Importer CSV"
+                            >
+                              <Upload className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveSupplier(supplier.name);
+                              }}
+                              className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Supprimer"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Orders Panel */}
+              <div className="bg-white rounded-xl shadow overflow-hidden">
+                <div className="p-4 border-b border-gray-200 bg-gray-50">
+                  <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <FileSpreadsheet className="h-5 w-5 text-green-600" />
+                    {selectedSupplierForOrders 
+                      ? `Commandes - ${selectedSupplierForOrders}` 
+                      : 'Sélectionnez un fournisseur'}
+                  </h3>
+                </div>
+
+                {!selectedSupplierForOrders ? (
+                  <div className="p-8 text-center">
+                    <Eye className="h-12 w-12 mx-auto text-gray-300 mb-3" />
+                    <p className="text-gray-500">Sélectionnez un fournisseur</p>
+                    <p className="text-gray-400 text-sm">pour voir ses commandes</p>
+                  </div>
+                ) : loadingOrders ? (
+                  <div className="p-8 text-center">
+                    <div className="h-8 w-8 mx-auto animate-spin rounded-full border-2 border-green-500 border-t-transparent" />
+                    <p className="mt-2 text-gray-500">Chargement...</p>
+                  </div>
+                ) : supplierOrders.length === 0 ? (
+                  <div className="p-8 text-center">
+                    <Package className="h-12 w-12 mx-auto text-gray-300 mb-3" />
+                    <p className="text-gray-500">Aucune commande</p>
+                    <button
+                      onClick={() => {
+                        setNewOrderForm({ ...newOrderForm, supplier_name: selectedSupplierForOrders });
+                        setShowAddOrderModal(true);
+                      }}
+                      className="mt-3 text-blue-600 hover:text-blue-700 text-sm"
+                    >
+                      + Ajouter une commande
+                    </button>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-gray-600">Date Promise</th>
+                          <th className="px-4 py-3 text-left text-gray-600">Date Livrée</th>
+                          <th className="px-4 py-3 text-right text-gray-600">Retard</th>
+                          <th className="px-4 py-3 text-right text-gray-600">Défauts</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {supplierOrders.slice(0, 20).map((order, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 text-gray-900">{order.date_promised}</td>
+                            <td className="px-4 py-3 text-gray-900">{order.date_delivered}</td>
+                            <td className={`px-4 py-3 text-right ${order.delay > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                              {order.delay !== undefined ? `${order.delay}j` : '-'}
+                            </td>
+                            <td className={`px-4 py-3 text-right ${(order.defects || 0) > 0.05 ? 'text-red-600' : 'text-green-600'}`}>
+                              {order.defects !== undefined ? `${(order.defects * 100).toFixed(1)}%` : '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {supplierOrders.length > 20 && (
+                      <div className="p-3 text-center text-gray-500 text-sm bg-gray-50">
+                        Affichage des 20 premières commandes sur {supplierOrders.length}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Quick Actions */}
+            <div className="bg-gradient-to-r from-green-600 to-teal-600 rounded-xl p-6 shadow">
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div>
+                  <h3 className="font-semibold text-white mb-1">Actions rapides</h3>
+                  <p className="text-green-100 text-sm">
+                    Après ajout de données, actualisez le dashboard pour voir les nouvelles analyses.
+                  </p>
+                </div>
+                <button
+                  onClick={async () => {
+                    if (dashboardActivated) {
+                      setDashboardActivated(false);
+                      setDashboardData(null);
+                    }
+                    const success = await handleActivateDashboard();
+                    if (success) {
+                      setActiveTab('overview');
+                    }
+                  }}
+                  disabled={!workspaceInfo?.dataset?.has_data}
+                  className="flex items-center gap-2 px-6 py-3 bg-white text-green-600 rounded-lg font-medium hover:bg-green-50 transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw className="h-5 w-5" />
+                  Recalculer Dashboard
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Add Supplier Modal */}
+        {showAddSupplierModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
+              <div className="p-6 border-b border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-900">Ajouter un Fournisseur</h3>
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nom *</label>
+                  <input
+                    type="text"
+                    value={newSupplierForm.name}
+                    onChange={(e) => setNewSupplierForm({ ...newSupplierForm, name: e.target.value })}
+                    placeholder="Nom du fournisseur"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                  <textarea
+                    value={newSupplierForm.description}
+                    onChange={(e) => setNewSupplierForm({ ...newSupplierForm, description: e.target.value })}
+                    placeholder="Description optionnelle"
+                    rows={2}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Catégorie</label>
+                  <input
+                    type="text"
+                    value={newSupplierForm.category}
+                    onChange={(e) => setNewSupplierForm({ ...newSupplierForm, category: e.target.value })}
+                    placeholder="Ex: Composants, Matières premières..."
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+              <div className="p-6 border-t border-gray-200 flex justify-end gap-3">
+                <button
+                  onClick={() => setShowAddSupplierModal(false)}
+                  className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handleAddSupplier}
+                  disabled={addingSupplier || !newSupplierForm.name.trim()}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                >
+                  {addingSupplier ? 'Ajout...' : 'Ajouter'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Add Order Modal */}
+        {showAddOrderModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-900">Ajouter une Commande</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  {workspaceInfo?.workspace?.data_type === 'delays' && 'Case A - Retards uniquement'}
+                  {workspaceInfo?.workspace?.data_type === 'late_days' && 'Case B - Défauts uniquement'}
+                  {workspaceInfo?.workspace?.data_type === 'mixed' && 'Case C - Retards et défauts'}
+                </p>
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Fournisseur *</label>
+                  <select
+                    value={newOrderForm.supplier_name}
+                    onChange={(e) => setNewOrderForm({ ...newOrderForm, supplier_name: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="">Sélectionnez un fournisseur</option>
+                    {suppliersData.map(s => (
+                      <option key={s.name} value={s.name}>{s.name}</option>
+                    ))}
+                    {workspaceInfo?.dataset?.suppliers?.filter(s => !suppliersData.find(sd => sd.name === s)).map(s => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                </div>
+                
+                {/* Date fields - Show for Case A (delays) and Case C (mixed) */}
+                {(workspaceInfo?.workspace?.data_type === 'delays' || workspaceInfo?.workspace?.data_type === 'mixed') && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Date Promise *</label>
+                      <input
+                        type="date"
+                        value={newOrderForm.date_promised}
+                        onChange={(e) => setNewOrderForm({ ...newOrderForm, date_promised: e.target.value })}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Date Livrée</label>
+                      <input
+                        type="date"
+                        value={newOrderForm.date_delivered}
+                        onChange={(e) => setNewOrderForm({ ...newOrderForm, date_delivered: e.target.value })}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                  </div>
+                )}
+                
+                {/* Defects field - Show for Case B (late_days) and Case C (mixed) */}
+                {(workspaceInfo?.workspace?.data_type === 'late_days' || workspaceInfo?.workspace?.data_type === 'mixed') && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Taux de défauts (0-1) {workspaceInfo?.workspace?.data_type === 'late_days' ? '*' : ''}
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="1"
+                        value={newOrderForm.defects}
+                        onChange={(e) => setNewOrderForm({ ...newOrderForm, defects: parseFloat(e.target.value) || 0 })}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Quantité</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={newOrderForm.quantity}
+                        onChange={(e) => setNewOrderForm({ ...newOrderForm, quantity: parseInt(e.target.value) || 0 })}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                  </div>
+                )}
+                
+                {/* Quantity field for Case A (no defects row) */}
+                {workspaceInfo?.workspace?.data_type === 'delays' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Quantité</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={newOrderForm.quantity}
+                      onChange={(e) => setNewOrderForm({ ...newOrderForm, quantity: parseInt(e.target.value) || 0 })}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                )}
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Référence commande</label>
+                  <input
+                    type="text"
+                    value={newOrderForm.order_reference}
+                    onChange={(e) => setNewOrderForm({ ...newOrderForm, order_reference: e.target.value })}
+                    placeholder="Ex: CMD-2024-001"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                  <textarea
+                    value={newOrderForm.notes}
+                    onChange={(e) => setNewOrderForm({ ...newOrderForm, notes: e.target.value })}
+                    placeholder="Notes optionnelles"
+                    rows={2}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+              <div className="p-6 border-t border-gray-200 flex justify-end gap-3">
+                <button
+                  onClick={() => setShowAddOrderModal(false)}
+                  className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handleAddOrder}
+                  disabled={addingOrder || !newOrderForm.supplier_name || 
+                    ((workspaceInfo?.workspace?.data_type === 'delays' || workspaceInfo?.workspace?.data_type === 'mixed') && !newOrderForm.date_promised)}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
+                >
+                  {addingOrder ? 'Ajout...' : 'Ajouter'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Supplier CSV Upload Modal */}
+        {showSupplierUploadModal && selectedSupplierForOrders && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
+              <div className="p-6 border-b border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Importer CSV - {selectedSupplierForOrders}
+                </h3>
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Mode d'import</label>
+                  <div className="flex gap-4">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        checked={supplierUploadMode === 'standard'}
+                        onChange={() => setSupplierUploadMode('standard')}
+                        className="text-blue-600"
+                      />
+                      <span className="text-sm">Standard</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        checked={supplierUploadMode === 'intelligent'}
+                        onChange={() => setSupplierUploadMode('intelligent')}
+                        className="text-blue-600"
+                      />
+                      <span className="text-sm">Intelligent (LLM)</span>
+                    </label>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Mode de fusion</label>
+                  <div className="flex gap-4">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        checked={mergeMode === 'append'}
+                        onChange={() => setMergeMode('append')}
+                        className="text-blue-600"
+                      />
+                      <span className="text-sm">Ajouter aux données</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        checked={mergeMode === 'replace'}
+                        onChange={() => setMergeMode('replace')}
+                        className="text-blue-600"
+                      />
+                      <span className="text-sm">Remplacer les données</span>
+                    </label>
+                  </div>
+                </div>
+                <div className="p-4 bg-blue-50 rounded-lg">
+                  <p className="text-sm text-blue-700">
+                    <strong>Format attendu :</strong> CSV avec colonnes date_promised, date_delivered, defects
+                    {supplierUploadMode === 'intelligent' && ' (les noms de colonnes seront détectés automatiquement)'}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Fichier CSV</label>
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleSupplierCSVUpload}
+                    disabled={uploadingSupplierCSV}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                {uploadingSupplierCSV && (
+                  <div className="flex items-center gap-2 text-blue-600">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                    <span>Import en cours...</span>
+                  </div>
+                )}
+              </div>
+              <div className="p-6 border-t border-gray-200 flex justify-end">
+                <button
+                  onClick={() => setShowSupplierUploadModal(false)}
+                  disabled={uploadingSupplierCSV}
+                  className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  Fermer
                 </button>
               </div>
             </div>
