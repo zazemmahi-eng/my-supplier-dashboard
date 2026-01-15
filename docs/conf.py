@@ -7,8 +7,8 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'Plateforme Analyse Fournisseurs'
-copyright = '2026, Équipe de développement'
-author = 'Équipe de développement'
+copyright = '2026, ES-SAAIDI Youssef & ZEMMAHI Zakariae'
+author = 'ES-SAAIDI Youssef, ZEMMAHI Zakariae (Encadré par: T. MASROUR, I. EL HASSANI)'
 release = '3.0.0'
 version = '3.0.0'
 

@@ -2,6 +2,17 @@
 Introduction
 ============
 
+.. note::
+   **Réalisé par :**
+   
+   - ES-SAAIDI Youssef
+   - ZEMMAHI Zakariae
+   
+   **Encadré par :**
+   
+   - T. MASROUR
+   - I. EL HASSANI
+
 Présentation du Projet
 ======================
 

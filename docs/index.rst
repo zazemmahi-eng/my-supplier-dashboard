@@ -68,6 +68,18 @@ Indices et Tables
 * :ref:`search`
 
 
+Équipe du Projet
+================
+
+.. list-table::
+   :widths: 30 70
+   :header-rows: 0
+
+   * - **Réalisé par**
+     - ES-SAAIDI Youssef, ZEMMAHI Zakariae
+   * - **Encadré par**
+     - T. MASROUR, I. EL HASSANI
+
 Version
 =======
 
