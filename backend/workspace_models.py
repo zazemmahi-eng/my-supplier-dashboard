@@ -10,7 +10,12 @@ from enum import Enum
 from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, Text, Enum as SQLEnum, JSON, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-from backend.database import Base
+
+# Try both import paths for flexibility
+try:
+    from backend.database import Base
+except ImportError:
+    from database import Base
 
 
 # ============================================
@@ -55,8 +60,9 @@ class Workspace(Base):
     data_type = Column(SQLEnum(DataTypeCase), default=DataTypeCase.CASE_A, nullable=False)
     status = Column(SQLEnum(WorkspaceStatus), default=WorkspaceStatus.ACTIVE)
     
-    # Owner reference (optional - for multi-tenant support)
-    owner_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=True)
+    # Owner reference - links to users table
+    owner_id = Column(UUID(as_uuid=True), nullable=True)
+    user_id = Column(UUID(as_uuid=True), nullable=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)

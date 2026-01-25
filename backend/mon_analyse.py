@@ -20,6 +20,135 @@ from backend.models import Order, Supplier
 # 1. FONCTIONS UTILITAIRES
 # ---------------------------------------------------------
 
+# ---------------------------------------------------------
+# 1.1 INDIVIDUAL PREDICTION FUNCTIONS
+# These functions are used by workspace_routes.py for multi-model comparison
+# ---------------------------------------------------------
+
+def prediction_moyenne_mobile(values: np.ndarray, fenetre: int = 3) -> Optional[float]:
+    """
+    Moving Average prediction.
+    Predicts the next value as the mean of the last 'fenetre' values.
+    
+    Args:
+        values: Array of historical values
+        fenetre: Window size for moving average (default: 3)
+    
+    Returns:
+        Predicted value or None if insufficient data
+    """
+    if values is None or len(values) < 1:
+        return None
+    
+    # Use available data up to window size
+    actual_window = min(fenetre, len(values))
+    return float(values[-actual_window:].mean())
+
+
+def prediction_regression_lineaire(values: np.ndarray) -> Optional[float]:
+    """
+    Linear Regression prediction.
+    Fits a linear trend and predicts the next value.
+    
+    Args:
+        values: Array of historical values
+    
+    Returns:
+        Predicted value or None if insufficient data
+    """
+    if values is None or len(values) < 2:
+        return None
+    
+    try:
+        X = np.arange(len(values)).reshape(-1, 1)
+        model = LinearRegression()
+        model.fit(X, values)
+        # Predict the next point (at index len(values))
+        prediction = model.predict([[len(values)]])[0]
+        return max(0.0, float(prediction))  # Ensure non-negative
+    except Exception:
+        return None
+
+
+def prediction_lissage_exponentiel(values: np.ndarray, alpha: float = 0.3) -> Optional[float]:
+    """
+    Exponential Smoothing prediction.
+    Applies exponential smoothing with parameter alpha.
+    Higher alpha = more weight to recent values.
+    
+    Formula: S_t = alpha * Y_t + (1 - alpha) * S_{t-1}
+    
+    Args:
+        values: Array of historical values
+        alpha: Smoothing factor between 0 and 1 (default: 0.3)
+    
+    Returns:
+        Smoothed prediction or None if insufficient data
+    """
+    if values is None or len(values) < 1:
+        return None
+    
+    # Clamp alpha to valid range
+    alpha = max(0.01, min(0.99, alpha))
+    
+    # Start with first value
+    smoothed = float(values[0])
+    
+    # Apply exponential smoothing
+    for i in range(1, len(values)):
+        smoothed = alpha * float(values[i]) + (1 - alpha) * smoothed
+    
+    return max(0.0, smoothed)  # Ensure non-negative
+
+
+def check_prediction_data_quality(values: np.ndarray, min_points: int = 5) -> Dict[str, Any]:
+    """
+    Check data quality for predictions and return warnings.
+    
+    Returns:
+        Dictionary with quality indicators and warnings
+    """
+    warnings = []
+    quality = "good"
+    
+    if values is None or len(values) == 0:
+        return {"quality": "insufficient", "warnings": ["No data available"]}
+    
+    n = len(values)
+    
+    if n < 2:
+        return {"quality": "insufficient", "warnings": ["Need at least 2 data points"]}
+    
+    if n < min_points:
+        warnings.append(f"Small dataset ({n} points). Predictions may be unreliable.")
+        quality = "limited"
+    
+    # Check for constant values (all same)
+    if np.std(values) < 1e-10:
+        warnings.append("All values are identical. All prediction methods will return the same result.")
+        quality = "constant"
+    
+    # Check for low variance
+    elif np.std(values) / (np.mean(values) + 1e-10) < 0.1:
+        warnings.append("Low data variance. Prediction methods may produce similar results.")
+        if quality == "good":
+            quality = "low_variance"
+    
+    # Check trend
+    if n >= 3:
+        trend = detecter_tendance(pd.Series(values))
+        if trend == "stable":
+            warnings.append("No clear trend detected. Moving Average and Linear Regression may be similar.")
+    
+    return {
+        "quality": quality,
+        "n_points": n,
+        "std_dev": float(np.std(values)),
+        "mean": float(np.mean(values)),
+        "warnings": warnings
+    }
+
+
 def calculer_volatilite(serie: pd.Series) -> float:
     """Calcule l'écart-type d'une série de données"""
     if len(serie) < 2:

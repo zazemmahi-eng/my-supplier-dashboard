@@ -1,0 +1,291 @@
+\documentclass[11pt,a4paper]{article}
+
+% Encodage et langue
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+
+% Mise en page
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+
+% Packages utiles
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+% Configuration des hyperliens
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!60!black,
+    urlcolor=blue!60!black,
+    citecolor=blue!60!black
+}
+
+% Style des sections
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection.}{0.5em}{}
+\titlespacing*{\section}{0pt}{2ex}{1ex}
+\titlespacing*{\subsection}{0pt}{1.5ex}{0.5ex}
+
+% En-tête et pied de page
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Plateforme d'Analyse Prédictive des Fournisseurs}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% Commande pour les mots-clés techniques
+\newcommand{\tech}[1]{\texttt{#1}}
+
+% ============================================
+% DOCUMENT
+% ============================================
+
+\begin{document}
+
+% Page de titre
+\begin{titlepage}
+    \centering
+    \vspace*{2cm}
+    
+    {\Large\textsc{Rapport de Projet}\\[0.3cm]}
+    \rule{\textwidth}{1pt}\\[0.5cm]
+    
+    {\LARGE\bfseries Plateforme d'Analyse Prédictive\\des Fournisseurs}\\[0.3cm]
+    
+    {\large Application SaaS avec Intelligence Artificielle}\\[0.2cm]
+    \rule{\textwidth}{1pt}
+    
+    \vspace{2cm}
+    
+    \begin{tabular}{rl}
+        \textbf{Réalisé par :} & ES-SAAIDI Youssef \\
+                               & ZEMMAHI Zakariae \\[0.5cm]
+        \textbf{Encadré par :} & T. MASROUR \\
+                               & I. EL HASSANI \\
+    \end{tabular}
+    
+    \vfill
+    
+    {\large Janvier 2026}
+    
+\end{titlepage}
+
+% Table des matières (optionnelle, commentée pour gagner de l'espace)
+% \tableofcontents
+% \newpage
+
+% ============================================
+\section{Introduction}
+% ============================================
+
+\subsection{Contexte et Motivation}
+
+Dans un contexte économique où la gestion de la chaîne d'approvisionnement devient un enjeu stratégique majeur, les entreprises doivent disposer d'outils performants pour évaluer et anticiper les performances de leurs fournisseurs. Les retards de livraison et les défauts de qualité peuvent engendrer des coûts significatifs et impacter la satisfaction client.
+
+Ce projet vise à développer une \textbf{plateforme SaaS d'analyse prédictive} permettant aux responsables achats et supply chain de :
+\begin{itemize}[noitemsep]
+    \item Centraliser les données de performance fournisseurs
+    \item Calculer des indicateurs clés de performance (KPIs)
+    \item Prédire les risques futurs grâce au Machine Learning
+    \item Importer des données hétérogènes via un mapping intelligent par LLM
+\end{itemize}
+
+\subsection{Problématique}
+
+Les entreprises font face à plusieurs défis : (1) la \textbf{diversité des formats de données} provenant de différents systèmes, (2) le \textbf{manque de visibilité} sur les tendances de performance, et (3) l'absence d'outils de \textbf{prédiction} pour anticiper les problèmes. Notre solution adresse ces problématiques en proposant une plateforme unifiée avec intelligence artificielle intégrée.
+
+% ============================================
+\section{Architecture Générale}
+% ============================================
+
+L'application repose sur une architecture moderne en trois couches, favorisant la scalabilité et la maintenabilité.
+
+\subsection{Vue d'Ensemble}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Couche} & \textbf{Technologie} & \textbf{Rôle} \\
+\midrule
+Frontend & Next.js 15 / React & Interface utilisateur \\
+Backend & FastAPI (Python) & API REST et logique métier \\
+Base de données & PostgreSQL / Supabase & Stockage et authentification \\
+ML/Analytics & scikit-learn, pandas & Prédictions et analyses \\
+LLM & Ollama (local) & Mapping intelligent CSV \\
+\bottomrule
+\end{tabular}
+\caption{Stack technologique de la plateforme}
+\end{table}
+
+\subsection{Backend (FastAPI)}
+
+Le backend est développé avec \tech{FastAPI}, un framework Python moderne offrant des performances élevées et une documentation automatique (OpenAPI). Il expose plusieurs groupes de routes :
+
+\begin{itemize}[noitemsep]
+    \item \tech{/api/workspaces} : Gestion des espaces de travail
+    \item \tech{/api/admin} : Administration et audit
+    \item \tech{/api/reports} : Export PDF/Excel
+\end{itemize}
+
+Les modèles de données sont définis avec \tech{SQLAlchemy} et validés via \tech{Pydantic}.
+
+\subsection{Frontend (Next.js)}
+
+Le frontend utilise \tech{Next.js 15} avec l'App Router, offrant un rendu hybride (SSR/SSG). L'interface est construite avec \tech{TailwindCSS} et les composants \tech{Shadcn UI}. La gestion des états et du cache est assurée par \tech{React Query}.
+
+\subsection{Base de Données (Supabase)}
+
+\tech{Supabase} fournit une base PostgreSQL managée avec authentification intégrée. Le système exploite le \textbf{Row Level Security (RLS)} pour garantir l'isolation des données entre utilisateurs.
+
+% ============================================
+\section{Logique Applicative}
+% ============================================
+
+\subsection{Gestion des Comptes}
+
+La plateforme distingue deux types d'utilisateurs :
+
+\begin{itemize}[noitemsep]
+    \item \textbf{Utilisateur standard} : Accès à ses propres workspaces, création de KPIs personnalisés, import de données, export de rapports.
+    \item \textbf{Administrateur} : Supervision globale, gestion des utilisateurs, accès en \textit{lecture seule} aux données de tous les utilisateurs, consultation des logs d'audit.
+\end{itemize}
+
+L'administrateur ne peut \textbf{pas modifier} les données des autres utilisateurs, garantissant ainsi l'intégrité et la traçabilité.
+
+\subsection{Concept de Workspaces}
+
+Un \textbf{workspace} (espace de travail) est un conteneur isolé comprenant :
+\begin{itemize}[noitemsep]
+    \item Un jeu de données importé (CSV)
+    \item Des KPIs personnalisés avec formules
+    \item Des paramètres de modèle de prédiction
+    \item Un historique de transformations
+\end{itemize}
+
+Chaque utilisateur peut créer plusieurs workspaces pour différents projets ou analyses, avec une isolation complète des données.
+
+\subsection{Flux de Données et Tableaux de Bord}
+
+Le flux de données suit le processus : \textbf{Import CSV} $\rightarrow$ \textbf{Validation/Normalisation} $\rightarrow$ \textbf{Calcul KPIs} $\rightarrow$ \textbf{Prédictions} $\rightarrow$ \textbf{Visualisation}.
+
+Le tableau de bord affiche en temps réel : taux de retard, taux de défauts, score de risque par fournisseur, tendances et alertes.
+
+% ============================================
+\section{Ingestion de Données et Intégration LLM}
+% ============================================
+
+\subsection{Problématique de l'Ingestion CSV}
+
+Les entreprises utilisent des formats de données variés avec des noms de colonnes hétérogènes (ex: \tech{Fournisseur}, \tech{Vendor}, \tech{supplier}). L'import manuel nécessite une configuration fastidieuse pour chaque nouveau fichier.
+
+\subsection{Mapping Intelligent par LLM}
+
+Notre solution intègre \tech{Ollama}, un outil permettant d'exécuter des LLM (Large Language Models) \textbf{localement}, sans envoi de données vers des API externes. Le processus de mapping intelligent fonctionne ainsi :
+
+\begin{enumerate}[noitemsep]
+    \item Analyse des noms de colonnes et échantillons de valeurs
+    \item Envoi d'un prompt structuré au LLM local (Mistral/Llama)
+    \item Réception des suggestions de mapping avec scores de confiance
+    \item Validation par l'utilisateur et application des transformations
+\end{enumerate}
+
+En cas d'indisponibilité d'Ollama, un \textbf{fallback} par expressions régulières assure le fonctionnement.
+
+\subsection{Types de Données Supportés}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{Case} & \textbf{Type} & \textbf{Colonnes requises} \\
+\midrule
+A & Retards & supplier, date\_promised, date\_delivered \\
+B & Défauts & supplier, order\_date, defects \\
+C & Mixte & supplier, date\_promised, date\_delivered, defects \\
+\bottomrule
+\end{tabular}
+\caption{Schémas de données supportés}
+\end{table}
+
+\subsection{Avantages de l'Intégration LLM}
+
+L'utilisation d'un LLM local offre plusieurs avantages : (1) \textbf{confidentialité} des données (aucun envoi externe), (2) \textbf{flexibilité} face aux formats hétérogènes, (3) \textbf{réduction du temps} de configuration, (4) \textbf{traçabilité} complète des transformations appliquées.
+
+% ============================================
+\section{Analytique et Prédictions}
+% ============================================
+
+\subsection{Calcul des KPIs}
+
+Le système calcule automatiquement plusieurs indicateurs :
+
+\begin{itemize}[noitemsep]
+    \item \textbf{Taux de retard} : $\frac{\text{commandes en retard}}{\text{total commandes}} \times 100$
+    \item \textbf{Taux de défauts} : Moyenne des défauts par livraison
+    \item \textbf{Retard moyen} : Moyenne des jours de retard (si retard > 0)
+    \item \textbf{Taux de conformité} : Pourcentage de commandes parfaites
+\end{itemize}
+
+Les utilisateurs peuvent créer des \textbf{KPIs personnalisés} avec des formules incluant les variables disponibles.
+
+\subsection{Scoring de Risque}
+
+Chaque fournisseur reçoit un \textbf{score de risque composite} (0-100) calculé selon :
+
+\begin{equation}
+\text{Score} = \alpha \cdot \text{Score}_{\text{retard}} + \beta \cdot \text{Score}_{\text{défaut}} + \gamma \cdot \text{Ajustement}_{\text{tendance}}
+\end{equation}
+
+Les fournisseurs sont classés en trois niveaux : \textcolor{green!60!black}{Faible} (< 25), \textcolor{orange}{Modéré} (25-55), \textcolor{red!70!black}{Élevé} (> 55).
+
+\subsection{Modèles de Prédiction}
+
+Trois méthodes de prédiction sont implémentées :
+
+\begin{enumerate}[noitemsep]
+    \item \textbf{Moyenne Glissante} : Lissage sur une fenêtre de $n$ périodes, adapté aux données stables.
+    \item \textbf{Régression Linéaire} : Projection basée sur la tendance historique, utilisant \tech{scikit-learn}.
+    \item \textbf{Lissage Exponentiel} : Pondération des données récentes avec paramètre $\alpha$, réactif aux changements.
+\end{enumerate}
+
+Un \textbf{modèle combiné} calcule une moyenne pondérée des trois méthodes pour une prédiction plus robuste. L'utilisateur peut sélectionner la méthode la plus adaptée à ses données.
+
+% ============================================
+\section{Conclusion}
+% ============================================
+
+\subsection{Réalisations}
+
+Ce projet a permis de développer une plateforme complète d'analyse prédictive des fournisseurs, intégrant :
+\begin{itemize}[noitemsep]
+    \item Une architecture moderne et scalable (FastAPI, Next.js, Supabase)
+    \item Un système d'import intelligent utilisant un LLM local
+    \item Des algorithmes de prédiction basés sur le Machine Learning
+    \item Un système de rôles avec audit et traçabilité
+    \item Une documentation complète en français (Sphinx)
+\end{itemize}
+
+\subsection{Limitations}
+
+Certaines limitations ont été identifiées : (1) la dépendance à Ollama pour le mapping optimal, (2) l'absence de notifications temps réel, (3) le support limité aux fichiers CSV.
+
+\subsection{Perspectives d'Amélioration}
+
+Les évolutions futures envisagées incluent : l'intégration de sources de données supplémentaires (API ERP), l'ajout de modèles de prédiction plus avancés (LSTM, Prophet), un système d'alertes automatiques, et une application mobile pour le suivi en temps réel.
+
+\vfill
+\begin{center}
+\rule{0.5\textwidth}{0.4pt}\\[0.3cm]
+\small\textit{Projet réalisé dans le cadre du cursus d'ingénierie -- 2025/2026}
+\end{center}
+
+\end{document}

@@ -81,8 +81,8 @@ class WorkspaceResponse(BaseModel):
     description: Optional[str]
     data_type: str
     status: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
     has_data: bool = False
     supplier_count: int = 0
     row_count: int = 0
@@ -478,8 +478,8 @@ async def get_global_dashboard(
             "has_data": has_data,
             "supplier_count": supplier_count,
             "row_count": row_count,
-            "created_at": ws.created_at.isoformat(),
-            "updated_at": ws.updated_at.isoformat()
+            "created_at": ws.created_at.isoformat() if ws.created_at else None,
+            "updated_at": ws.updated_at.isoformat() if ws.updated_at else None
         })
     
     # Calculate global averages
@@ -1747,73 +1747,149 @@ def calculate_case_specific_actions(risques: List[Dict], data_type: DataTypeCase
     return actions
 
 
-def calculate_case_specific_predictions(df: pd.DataFrame, data_type: DataTypeCase, fenetre: int = 3) -> List[Dict[str, Any]]:
+def calculate_case_specific_predictions(
+    df: pd.DataFrame, 
+    data_type: DataTypeCase, 
+    fenetre: int = 3,
+    selected_model: str = "combined",
+    alpha: float = 0.3
+) -> List[Dict[str, Any]]:
     """
-    Calculate predictions specific to the data type case.
-    Uses existing ML model functions but filters output based on case.
+    Calculate predictions specific to the data type case using the selected model.
     
     Case A: Only delay predictions
     Case B: Only defect predictions
     Case C: Both predictions
+    
+    Models:
+    - moving_average: Uses last N values average
+    - linear_regression: Uses trend-based prediction
+    - exponential: Uses exponential smoothing
+    - combined: Average of all three methods
+    
+    Args:
+        df: DataFrame with supplier data
+        data_type: Case type (A, B, or C)
+        fenetre: Window size for moving average
+        selected_model: Which prediction model to use
+        alpha: Smoothing factor for exponential smoothing
     """
+
+    import numpy as np
+    from backend.mon_analyse import (
+        prediction_moyenne_mobile,
+        prediction_regression_lineaire,
+        prediction_lissage_exponentiel,
+        check_prediction_data_quality
+    )
+    
     predictions = []
     
     for supplier in df['supplier'].unique():
-        supplier_df = df[df['supplier'] == supplier]
+        supplier_df = df[df['supplier'] == supplier].sort_values('date_promised' if 'date_promised' in df.columns else df.columns[0])
         n_orders = len(supplier_df)
+        
+        if n_orders < 2:
+            # Not enough data for meaningful predictions
+            pred = {
+                'supplier': supplier,
+                'nb_commandes_historique': n_orders,
+                'confiance': 'insuffisante',
+                'warning': 'Données insuffisantes (minimum 2 points requis)'
+            }
+            if data_type in [DataTypeCase.CASE_A, DataTypeCase.CASE_C]:
+                pred['predicted_delay'] = None
+            if data_type in [DataTypeCase.CASE_B, DataTypeCase.CASE_C]:
+                pred['predicted_defect'] = None
+            predictions.append(pred)
+            continue
         
         pred = {
             'supplier': supplier,
             'nb_commandes_historique': n_orders,
-            'confiance': 'haute' if n_orders >= 10 else 'moyenne' if n_orders >= 5 else 'basse'
+            'confiance': 'haute' if n_orders >= 10 else 'moyenne' if n_orders >= 5 else 'basse',
+            'selected_model': selected_model
         }
+        
+        warnings = []
+        
+        def calculate_prediction(values: np.ndarray, is_percentage: bool = False) -> Optional[float]:
+            """Calculate prediction using selected model"""
+            if values is None or len(values) < 1:
+                return None
+            
+            # Check data quality
+            quality_info = check_prediction_data_quality(values)
+            if quality_info['warnings']:
+                warnings.extend(quality_info['warnings'])
+            
+            # Calculate based on selected model
+            if selected_model == "moving_average":
+                result = prediction_moyenne_mobile(values, fenetre)
+            elif selected_model == "linear_regression":
+                result = prediction_regression_lineaire(values)
+            elif selected_model == "exponential":
+                result = prediction_lissage_exponentiel(values, alpha)
+            elif selected_model == "combined":
+                # Calculate all three and average
+                ma = prediction_moyenne_mobile(values, fenetre)
+                lr = prediction_regression_lineaire(values)
+                exp = prediction_lissage_exponentiel(values, alpha)
+                
+                valid_preds = [p for p in [ma, lr, exp] if p is not None]
+                if valid_preds:
+                    result = sum(valid_preds) / len(valid_preds)
+                else:
+                    result = None
+            else:
+                # Default to moving average
+                result = prediction_moyenne_mobile(values, fenetre)
+            
+            if result is not None and is_percentage:
+                result = result * 100
+            
+            return result
         
         if data_type == DataTypeCase.CASE_A:
             # ========================================
             # CASE A: DELAY PREDICTIONS ONLY
             # ========================================
-            delays = supplier_df['delay'].values
-            # Simple moving average prediction
-            if len(delays) >= fenetre:
-                pred['predicted_delay'] = round(float(delays[-fenetre:].mean()), 1)
-            else:
-                pred['predicted_delay'] = round(float(delays.mean()), 1)
+            delays = supplier_df['delay'].values.astype(float)
+            pred_delay = calculate_prediction(delays)
+            pred['predicted_delay'] = round(pred_delay, 1) if pred_delay is not None else None
             pred['predicted_defect'] = None  # Not applicable for Case A
             
         elif data_type == DataTypeCase.CASE_B:
             # ========================================
             # CASE B: DEFECT PREDICTIONS ONLY
             # ========================================
-            defects = supplier_df['defects'].values
-            # Simple moving average prediction
-            if len(defects) >= fenetre:
-                pred['predicted_defect'] = round(float(defects[-fenetre:].mean()) * 100, 2)
-            else:
-                pred['predicted_defect'] = round(float(defects.mean()) * 100, 2)
+            defects = supplier_df['defects'].values.astype(float)
+            pred_defect = calculate_prediction(defects, is_percentage=True)
+            pred['predicted_defect'] = round(pred_defect, 2) if pred_defect is not None else None
             pred['predicted_delay'] = None  # Not applicable for Case B
             
         elif data_type == DataTypeCase.CASE_C:
             # ========================================
             # CASE C: BOTH PREDICTIONS
             # ========================================
-            delays = supplier_df['delay'].values
-            defects = supplier_df['defects'].values
+            delays = supplier_df['delay'].values.astype(float)
+            defects = supplier_df['defects'].values.astype(float)
             
-            # Delay prediction
-            if len(delays) >= fenetre:
-                pred['predicted_delay'] = round(float(delays[-fenetre:].mean()), 1)
-            else:
-                pred['predicted_delay'] = round(float(delays.mean()), 1)
+            pred_delay = calculate_prediction(delays)
+            pred_defect = calculate_prediction(defects, is_percentage=True)
             
-            # Defect prediction
-            if len(defects) >= fenetre:
-                pred['predicted_defect'] = round(float(defects[-fenetre:].mean()) * 100, 2)
-            else:
-                pred['predicted_defect'] = round(float(defects.mean()) * 100, 2)
+            pred['predicted_delay'] = round(pred_delay, 1) if pred_delay is not None else None
+            pred['predicted_defect'] = round(pred_defect, 2) if pred_defect is not None else None
+        
+        # Add warnings if any
+        if warnings:
+            # Remove duplicates
+            pred['warnings'] = list(set(warnings))
         
         predictions.append(pred)
     
     return predictions
+    # (function body removed, see new implementation above)
 
 
 @router.get("/{workspace_id}/analysis/dashboard")
@@ -1872,8 +1948,14 @@ async def get_workspace_dashboard(
         # Calculate case-specific recommended actions
         actions = calculate_case_specific_actions(risques, workspace.data_type)
         
+        # Get selected model and alpha
+        selected_model = model_sel.selected_model if model_sel and hasattr(model_sel, 'selected_model') else "combined"
+        alpha = model_sel.parameters.get("alpha", 0.3) if model_sel and model_sel.parameters else 0.3
+
         # Calculate case-specific predictions
-        predictions = calculate_case_specific_predictions(df, workspace.data_type, fenetre)
+        predictions = calculate_case_specific_predictions(
+            df, workspace.data_type, fenetre, selected_model=selected_model, alpha=alpha
+        )
         
         # Calculate risk distribution
         distribution = {

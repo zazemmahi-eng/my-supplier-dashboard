@@ -164,7 +164,7 @@ function ClientOnlyTime() {
   return <span>{time || '—'}</span>;
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_SUPPLIER_API_URL ?? 'http://127.0.0.1:8000';
 
 export default function WorkspaceView({ workspaceId, workspaceName, onBack }: WorkspaceViewProps) {
   // Core state
